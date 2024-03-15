@@ -1,0 +1,39 @@
+batch_size: 256
+datasets:
+  always_include_start: true
+  dataset_type: padded
+  detected_location: false
+  env: prisoner
+  include_current: false
+  max_seq_len: 15
+  multi_head: false
+  num_heads: 1
+  num_workers: 4
+  one_hot_agents: true
+  seq_len: 16
+  step_length: 0
+  test_path: datasets/random/test
+  timestep: false
+  train_path: datasets/random/train
+  view: blue
+device: cuda
+model:
+  decoder_type: mixture
+  encoder_type: lstm
+  gnn_hidden_dim: 8
+  h1: 32
+  h2: 16
+  input_dim: 3
+  load_pth: /home/sye40/PrisonerEscape/logs/IROS/marl/categorical/20230222-2123/best.pth
+  model_type: padded_mog_v2
+  number_gaussians: 8
+training:
+  alpha: 5
+  epochs: 100
+  l2_lambda: 0.15
+  learning_rate: 8.0e-05
+  log_dir: logs/IROS/marl/categorical_mi
+  ml_flow_experiment: 1
+  scheduler: null
+  seed: 101
+  weight_decay: 0.0

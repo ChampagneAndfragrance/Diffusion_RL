@@ -1,0 +1,68 @@
+device: cuda
+batch_size: 128
+
+# Dataset Path
+datasets:
+  dataset_type: gnn
+  train_path: /home/wu/GatechResearch/Zixuan/data/GNN_pretrain_dataset/IROS_2023/random/train
+  test_path: /home/wu/GatechResearch/Zixuan/data/GNN_pretrain_dataset/IROS_2023/random/test
+  eval_path: /home/wu/GatechResearch/Zixuan/data/GNN_pretrain_dataset/IROS_2023/random/eval
+
+  view: blue # only for blue view
+  seq_len: 16
+  num_workers: 4
+
+  # Multistep into the future
+  multi_head: False
+  num_heads: 1
+  step_length: 0
+  include_current: False
+
+  # Options for different node features
+  one_hot_agents: True
+  detected_location: True
+  timestep: True
+  # last_two_detection: False
+  last_two_detection_in_graph_obs: False
+  
+  # Option to add 
+  get_start_location: True
+  get_last_k_detections: True
+  last_two_detection_with_vel: True
+
+# Model Setup
+prior_model:
+  model_type: 'mlp'
+  load_pth: null 
+  # load_pth: /home/wu/GatechResearch/Zixuan/PrisonerEscape/logs/marl_warm_start/homo_gnn/high_speed_corner_RL_25000/best.pth
+  # load_pth: /home/wu/GatechResearch/Zixuan/PrisonerEscape/IROS_2023_logs/filter/RL_0/sel_mlp/prior/best.pth 
+  input_dim: 254
+  encoder_type: 'lstm'
+  hidden_dim: 16
+  gnn_hidden_dim: 16
+  decoder_type: 'mixture'
+  number_gaussians: 8
+
+combined_model:
+  model_type: 'sel_mlp'
+  load_pth: null
+  # load_pth: /home/wu/GatechResearch/Zixuan/PrisonerEscape/logs/marl_warm_start/homo_gnn/20221207-2040/best.pth
+  load_pth: /home/wu/GatechResearch/Zixuan/PrisonerEscape/IROS_2023_logs/filter/sel_mlp/prior/best.pth 
+  input_dim: 254
+  encoder_type: 'lstm'
+  hidden_dim: 16
+  gnn_hidden_dim: 16
+  decoder_type: 'mixture'
+  number_gaussians: 8
+
+# Training Setup
+training:
+  weight_decay: 0.0001
+  save_epoch: False
+  scheduler: null
+  log_dir: "/home/wu/GatechResearch/Zixuan/PrisonerEscape/IROS_2023_logs/filter/random/combine" 
+  seed: 103
+  learning_rate: 0.001
+  epochs: 200
+  l2_lambda: 0
+  ml_flow_experiment: 1

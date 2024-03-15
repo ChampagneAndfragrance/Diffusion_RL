@@ -1,0 +1,76 @@
+environment:
+  cuda: True
+  seed: 0 # Random seed
+  structure: regular
+  fugitive_policy: a_star
+  estimator: filtering
+  env_config_file: "./simulator/configs/balance_game.yaml" 
+  dir_path: "base_dir_path"
+  gnn_agent_last_detect: "no"
+
+train:
+  high_buffer_size: 1048576 # original 1048576
+  low_buffer_size: 1048576 # 131072 #  524288 # 1048576 # original 1048576
+  buffer_size: 1048576
+  filtering_model_config: "./configs/IROS_2023/sel_mlp.yaml"
+  # filtering_model_path: "/home/wu/GatechResearch/Zixuan/data/GNN_pretrained_model/best.pth" 
+  # filtering_model_path: ./blue_bc/saved_models/high_speed_corner_fromVel_combined_success/best.pth
+  filtering_model_path: ./IROS_2023_logs/filter/random/combine/20230226-1817/best.pth
+  start_episode: 0
+  episode_num: 100001 # 100001
+  dist_coeff_episode_num: 100001
+  only_low_episode_num: 25001
+  steps_per_update: 1
+  batch_size: 256 # original: 256 "Batch size for model training"
+  video_step: 1000 # 1000 500
+  high_n_exploration_eps: 2500 # original: 60000
+  low_n_exploration_eps: 15000 # original: 60000
+  n_exploration_eps: 75001
+  init_noise_scale: 0.1 # original 0.25, 0.1, 0.5, 0.01
+  final_noise_scale: 0.0
+  save_interval: 1000 # original 1000
+  hidden_dim: 256 # 128, 256, 512
+  seq_len: 4
+  critic_lr: 0.0005
+  policy_lr: 0.0005
+  threat_lr: 0.0005
+  entropy_lr: 0.0005
+  tau: 0.01
+  gamma: 0.97 # 0.95, 0.995, 0.99, 0.8
+  policy_level: subpolicy # subpolicy, scheduler, heuristic, high_heuristic
+  policy_type: sac # sac, ddpg
+  model_type: free
+  path_type: whole # piece, whole
+  threat_model_freq: 3
+  seq_len_in: 10
+  seq_len_out: 8
+
+  continue: True
+  para_file: /home/wu/GatechResearch/Zixuan/PrisonerEscape/IROS_2023_logs/MARL/three_pass_filter_two_detections_noMARLTraining_no_sharing/three_pass_filter_two_detections_noMARLTraining_no_sharing/model.pth
+  high_para_file: "/home/wu/GatechResearch/Zixuan/PrisonerEscape/logs/marl/20230211-032801/hier_gnn_a_star_filtering/model.pth"
+  low_para_file: "/home/wu/GatechResearch/Zixuan/PrisonerEscape/logs/marl/20230211-032801/hier_gnn_a_star_filtering/model.pth"
+
+  # behavior_policy: diffusion_state_only # AStar_only, diffusion_state_only
+  off_policy_ep: 0
+
+per:
+  e: 0.01 
+  a: 0.3 # original 0.3
+  beta: 0.3
+  beta_increment_per_sampling: 0.00001
+
+control:
+  P: 20.0
+  I: 0.0
+  D: 0.0
+
+scheduler:
+  subpolicy_num: 4
+  policy_files: 
+    - "./logs/marl/subpolicies/hideout1.pth"
+    - "./logs/marl/subpolicies/hideout2.pth"
+    - "./logs/marl/subpolicies/hideout3.pth"
+    - "./logs/marl/subpolicies/evasive.pth"
+  # scheduler_files: "/home/wu/GatechResearch/Zixuan/PrisonerEscape/logs/marl/schedulers/time_-0.05.pth"
+  scheduler_files: "/home/wu/GatechResearch/Zixuan/PrisonerEscape/logs/marl/schedulers/hideout_time_evasive_noEntropy.pth"
+
