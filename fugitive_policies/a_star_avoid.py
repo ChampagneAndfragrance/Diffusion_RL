@@ -196,13 +196,13 @@ class AStarAdversarialAvoid(AStarPolicy):
             # print("Detected helicopter or search party")
 
         if camera_in_range and detected_helicopter and detected_search_party:
-            # zoom to the closest known hideout
+            # Go to hideout
             theta = self.calculate_desired_heading(self.observations.location, closest_known_hideout.location)
             desired_action = self.wrapper_avoid_mountain(np.array([7.5, theta], dtype=np.float32))
         elif detected_helicopter and detected_search_party and np.sum(self.being_tracked_for_n_timesteps[-100:]) > 50:
             if self.DEBUG:
                 print('you have been tracked for too long and failed')
-            # zoom to the closest known hideout
+            # Failed, go to hideout
             theta = self.calculate_desired_heading(self.observations.location, closest_known_hideout.location)
             self.reset_plan()
             desired_action = self.wrapper_avoid_mountain(np.array([7.5, theta], dtype=np.float32))
@@ -211,19 +211,21 @@ class AStarAdversarialAvoid(AStarPolicy):
         elif detected_helicopter and np.sum(self.being_tracked_for_n_timesteps[-10:]) >= 7:
             # check if you are in dense forest
             in_dense_forest = self.in_dense_forest(self.observations.location)
+            # 7/10 helicopter - but helicopter is far away now: to hideout
             if distance(self.observations.location, detected_helicopter.location) > 100:
                 if self.DEBUG:
                     print('dont worry about heli, its too far')
                 self.last_action = 'dont worry about heli, its too far'
                 desired_action = self.action_to_closest_unknown_hideout()
-
+            # 7/10 helicopter - but helicopter is far away in dense forest: to hideout
             elif in_dense_forest and distance(self.observations.location, detected_helicopter.location) > 50:
                 # you have distanced yourself enough away from the heli
                 if self.DEBUG:
                     print('you have distanced yourself enough away from the heli')
                 desired_action = self.action_to_closest_unknown_hideout()
+            # 7/10 helicopter - and the helicopter is not away
             else:
-                # start evading, or continue evading
+                # you are in forest, start evading, or continue evading
                 if in_dense_forest and self.current_behavior == self.behaviors[0]:
                     # you have almost evaded, slow down, change direction
                     if self.last_action == 'you have almost evaded, slow down, change direction':
@@ -232,7 +234,7 @@ class AStarAdversarialAvoid(AStarPolicy):
                         if np.sum(self.being_tracked_for_n_timesteps[-200:]) > 180:
                             if self.DEBUG:
                                 print('you have been tracked for too long and failed')
-                            # zoom to the closest known hideout
+                            # Go to hideout
                             theta = self.calculate_desired_heading(self.observations.location,
                                                                    closest_known_hideout.location)
                             desired_action = self.wrapper_avoid_mountain(np.array([7.5, theta], dtype=np.float32))
@@ -243,8 +245,8 @@ class AStarAdversarialAvoid(AStarPolicy):
                         desired_action = self.wrapper_avoid_mountain(self.action_to_different_unknown_hideout(self.current_hideout_goal))
                         self.current_behavior_heading = desired_action[1]
                         self.last_action = 'you have almost evaded, slow down, change direction'
+                # you are evading, but not in dense forest yet
                 elif self.current_behavior == self.behaviors[0]:
-                    # you are evading, but not in dense forest yet
                     if self.DEBUG:
                         print('you are evading, but not in dense forest yet')
                     self.reset_plan()
@@ -257,6 +259,7 @@ class AStarAdversarialAvoid(AStarPolicy):
                                                                closest_known_hideout.location)
                         self.reset_plan()
                         desired_action = self.wrapper_avoid_mountain(np.array([7.5, theta], dtype=np.float32))
+                # you are not evading, but you should evade from now
                 else:
                     # start evading, determine direction to go
                     if self.DEBUG:
@@ -282,8 +285,9 @@ class AStarAdversarialAvoid(AStarPolicy):
                 if self.DEBUG:
                     print('you have distanced yourself enough away from the search part')
                 desired_action = self.action_to_closest_unknown_hideout()
+            # 7/10 of search party - start evading, or continue evading
             else:
-                # start evading, or continue evading
+                # you are now in the dense forest and evading heli
                 if in_dense_forest and self.current_behavior == self.behaviors[0]:
                     self.reset_plan()
                     # you have almost evaded, slow down, change direction

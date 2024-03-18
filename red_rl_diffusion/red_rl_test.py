@@ -597,7 +597,6 @@ def red_rl_piece_sac_evaluate(bench, bench_env_name, base_dir, episode_num = 100
     episodes_success = []
     agents_episodes_reward = []
     for ep in range(recent_episode, episode_num):
-    # for ep in [1, 19, 43, 45, 78, 82, 93, 97]:
         eval_seed = int(ep + 1e6 + 1)
 
         env.set_dist_coeff(-1, -1, 0)
@@ -711,7 +710,7 @@ if __name__ == '__main__':
     # INFO: these configurations are used for benchmark
     bench_env_name = "prisoner"
     benchmark_type = ["A_Star(escape)","RRT_Star(escape)", "VO", "DDPG", "SAC", "Diffusion", "Diffusion_RL", "Sel_Diffusion_RL"]
-    # benchmark_type = ["SAC"]
+    benchmark_type = ["Diffusion_RL"]
 
     benchmark_folder = {"A_Star(escape)": "./logs/RAL2024/benchmark_results/A_Star(escape)",
                         "RRT_Star(escape)": "./logs/RAL2024/benchmark_results/RRT_Star(escape)",
