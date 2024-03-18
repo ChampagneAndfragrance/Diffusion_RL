@@ -11,4 +11,7 @@ Adversarial Multi-agent Games".
 * Remember all the log files and checkpoints of the model you trained will be in the folder `logs`.
 ## Conda Environment
 * Please check the file `environment.yml` for the package versions we are using.
+## Visualizations
+![](https://github.com/ChampagneAndfragrance/Diffusion_RL/blob/main/logs/RAL2024/benchmark_results/Diffusion_RL/Diffusion_RL_prisoner/video/19.gif)
+![](https://github.com/ChampagneAndfragrance/Diffusion_RL/blob/main/logs/RAL2024/benchmark_results/Diffusion_RL/Diffusion_RL_prisoner/video/43.gif)
 
