@@ -130,7 +130,7 @@ cover/
 *.pot
 
 # Django stuff:
-*.log
+# *.log
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
@@ -221,7 +221,7 @@ simulator/temp.png
 *.swp
 
 # Ignore log data
-log/
+# log/
 logs/IROS
 logs/marl
 IROS_2023_logs/
@@ -235,7 +235,7 @@ IRL/trained_params/*
 #numpy objects
 *.npz
 #gifs
-*.gif
+# *.gif
 
 #output figures
 sye_figures/
