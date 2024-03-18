@@ -247,7 +247,7 @@ scripts/videos_old
 scripts/heatmaps
 figures/
 past_files/logs
-*.mp4
+# *.mp4
 mlruns/
 saved/
 
