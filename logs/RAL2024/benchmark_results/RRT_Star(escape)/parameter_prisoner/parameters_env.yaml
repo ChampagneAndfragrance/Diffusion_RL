@@ -1,0 +1,59 @@
+camera_file_path: simulator/camera_locations/original_no_camera_net.txt
+camera_net_bool: false
+camera_range_factor: 0.5
+comm_dim: 0
+detection_factor: 4.0
+epsilon: 0.0
+fugitive_speed: 15
+gnn_agent_last_detect: 'no'
+helicopter_battery_life: 401
+helicopter_recharge_time: 40
+helicopter_speed: 127
+heuristic_type: Normal
+include_camera_at_start: true
+include_fugitive_location_in_blue_obs: false
+include_start_location_blue_obs: false
+known_hideout_locations:
+- 323, 1623
+- 1804, 737
+- 317, 2028
+- 819, 1615
+- 1145, 182
+- 1304, 624
+- 234, 171
+- 2398, 434
+- 633, 2136
+- 1590, 2
+max_timesteps: 400
+min_distance_from_hideout_to_start: false
+mountain_locations:
+- 1600, 1800
+num_helicopters: 1
+num_known_hideouts: 1
+num_random_known_cameras: 30
+num_random_unknown_cameras: 30
+num_search_parties: 1
+num_unknown_hideouts: 2
+observation_terrain_feature: false
+random_cameras: false
+random_hideout_locations: false
+reward_setting: high
+search_party_speed: 20
+seed: 0
+spawn_mode: corner # uniform_hideout_dist
+spawn_range: 350
+step_reset: true
+store_last_k_fugitive_detections: true
+terrain: null
+terrain_map: simulator/forest_coverage/map_set/2_darker.npy
+unknown_hideout_locations:
+- 376, 1190
+- 909, 510
+- 397, 798
+- 2059, 541
+- 2011, 103
+- 901, 883
+- 1077, 1445
+- 602, 372
+- 80, 2274
+- 279, 477
