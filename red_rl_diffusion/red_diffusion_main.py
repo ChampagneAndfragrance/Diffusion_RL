@@ -41,13 +41,13 @@ def red_diffusion_train(epsilon, num_runs,
     
     """
 
-    diffusion_train_dataset = StateOnlyDataset(folder_path="./datasets/balance_game/gnn_map_0_run_10000_RRTStarOnly/train/1", 
+    diffusion_train_dataset = StateOnlyDataset(folder_path="./datasets/balance_game/gnn_map_0_run_10000_RRTStarOnly/train", 
                                          horizon=10,
                                          dataset_type = "prisoner_globe",
                                          include_start_detection = True,
                                          condition_path = True,
                                          max_trajectory_length=10,)
-    diffusion_valid_dataset = StateOnlyDataset(folder_path="./datasets/balance_game/gnn_map_0_run_10000_RRTStarOnly/train/1", 
+    diffusion_valid_dataset = StateOnlyDataset(folder_path="./datasets/balance_game/gnn_map_0_run_10000_RRTStarOnly/valid", 
                                          horizon=10,
                                          dataset_type = "prisoner_globe",
                                          include_start_detection = True,
@@ -55,7 +55,7 @@ def red_diffusion_train(epsilon, num_runs,
                                          max_trajectory_length=10,)
 
     if heuristic_type == 'diffusion':
-        path = f"./AAMAS_2023_logs/{folder_name}/start_seed_{starting_seed}_run_{num_runs}_{heuristic_type}"
+        path = f"./RAL_2024_logs/{folder_name}/start_seed_{starting_seed}_run_{num_runs}_{heuristic_type}"
         os.makedirs(path, exist_ok=True)
         writer = SummaryWriter(path+"/logs")
         # INFO: Red-only diffusions
