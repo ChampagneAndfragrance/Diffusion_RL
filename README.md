@@ -11,4 +11,15 @@ Adversarial Multi-agent Games".
 * Remember all the log files and checkpoints of the model you trained will be in the folder `logs`.
 ## Conda Environment
 * Please check the file `environment.yml` for the package versions we are using.
+## Citations
+* We adapt our diffusion model training code from [`Diffuser`](https://github.com/jannerm/diffuser) with the following citation:
+```c
+@inproceedings{janner2022diffuser,
+  title = {Planning with Diffusion for Flexible Behavior Synthesis},
+  author = {Michael Janner and Yilun Du and Joshua B. Tenenbaum and Sergey Levine},
+  booktitle = {International Conference on Machine Learning},
+  year = {2022},
+}
+```
+
 
