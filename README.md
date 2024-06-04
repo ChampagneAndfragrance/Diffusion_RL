@@ -12,7 +12,7 @@ Adversarial Multi-agent Games".
 ## Conda Environment
 * Please check the file `environment.yml` for the package versions we are using.
 ## Video
-![hippo](https://github.com/ChampagneAndfragrance/Diffusion_RL/blob/main/logs/RAL2024/benchmark_results/Diffusion_RL/Diffusion_RL_prisoner/video/demo0.gif)
+<img src="https://github.com/ChampagneAndfragrance/Diffusion_RL/blob/main/logs/RAL2024/benchmark_results/Diffusion_RL/Diffusion_RL_prisoner/video/demo0.gif" width="100" height="100" />
 ## Citations
 * We adapt our diffusion model training code from [`Diffuser`](https://github.com/jannerm/diffuser) with the following citation:
 ```c
