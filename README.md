@@ -13,6 +13,7 @@ Adversarial Multi-agent Games".
 * Please check the file `environment.yml` for the package versions we are using.
 ## Video
 <img src="https://github.com/ChampagneAndfragrance/Diffusion_RL/blob/main/logs/RAL2024/benchmark_results/Diffusion_RL/Diffusion_RL_prisoner/video/demo0.gif" width="500" height="500" />
+
 ## Citations
 * We adapt our diffusion model training code from [`Diffuser`](https://github.com/jannerm/diffuser) with the following citation:
 ```c
