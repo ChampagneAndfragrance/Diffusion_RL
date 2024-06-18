@@ -217,7 +217,7 @@ def diffusion_global_rl_local_collect(config, env_config):
 
     return
 
-def visualize_traj_with_reward_detection():
+def visualize_costmap():
 
     def patch_shapes(mapsize, shape, centers, radii, color):
         patches = []
@@ -569,8 +569,10 @@ if __name__ == '__main__':
     timestr = time.strftime("%Y%m%d-%H%M%S")
     base_dir = Path("./logs/marl") / timestr
     config["environment"]["dir_path"] = str(base_dir)
+    config["train"]["behavior_policy"] = "diffusion_state_only" # "diffusion_state_only", "VO"
     env_config["reward_setting"] = "rl"
 
+    # diffusion_global_rl_local_collect(config, env_config)
+    # visualize_costmap()
     # visualize_all_traj(vis_option="speed_vs_time")
     visualize_custom_environment()
-
