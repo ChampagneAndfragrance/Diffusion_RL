@@ -18,14 +18,25 @@ from fugitive_policies.a_star_local_planner import AStarLocalPlanner
 from fugitive_policies.diffusion_policy import  DiffusionGlobalPlannerHideout, DiffusionStateOnlyGlobalPlanner
 from diffuser.datasets.multipath import NAgentsIncrementalDataset
 from diffuser.graders.traj_graders import joint_traj_grader
-from matplotlib import pyplot as plt
+#from matplotlib import pyplot as plt
 
 import argparse
 import random
 import time
 
-global_device_name = "cuda"
-global_device = torch.device("cuda")
+def _select_device():
+    try:
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return "mps"
+    except Exception:
+        pass
+    if torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
+
+global_device_name = _select_device()
+global_device = torch.device(global_device_name)
+print(f"[Device] Using {global_device_name} (MPS available: {getattr(torch.backends, 'mps', None) and torch.backends.mps.is_available()}, CUDA available: {torch.cuda.is_available()})")
 
 mse_loss_func = torch.nn.MSELoss()
 
@@ -95,8 +106,10 @@ def collect_demonstrations(epsilon, num_runs,
         if random_cameras:
             path += "_random_cameras"
 
-        if not os.path.exists(path):
-            os.makedirs(path)
+        """if not os.path.exists(path):
+            os.makedirs(path)"""
+        path = os.path.join(path, "train")
+        os.makedirs(path, exist_ok=True)
 
         
         if blue_type == "heuristic":
@@ -263,7 +276,7 @@ def collect_waypoints(epsilon, num_runs,
     # dataloader_init = False
     
     break_goal_sample_rate = 0
-    for seed in tqdm(range(starting_seed, starting_seed + num_runs)):
+    for loop_seed in tqdm(range(starting_seed, starting_seed + num_runs)):
         goal_sample_rate = 0.1
         # goal_sample_rate = break_goal_sample_rate + (0.6 - break_goal_sample_rate) / num_runs * (seed - starting_seed)
         print("goal_sample_rate: ", goal_sample_rate)
@@ -293,9 +306,15 @@ def collect_waypoints(epsilon, num_runs,
         env = load_environment(env_path)
         
         # env.seed(seed)
+        """
         print("Running with seed {}".format(seed))
         np.random.seed(seed)
         random.seed(seed)
+        """
+        print(f"Running with seed {loop_seed}")
+        np.random.seed(loop_seed)
+        random.seed(loop_seed)
+
 
         if heuristic_type == 'Normal':
             red_policy = HeuristicPolicy(env, epsilon=epsilon)
@@ -313,9 +332,9 @@ def collect_waypoints(epsilon, num_runs,
             diffusion_path = "./saved_models/diffusion_models/red_only_one_hideout/corner/H240_T10/diff_98000.pt"
             ema_path = "./saved_models/diffusion_models/red_only_one_hideout/corner/H240_T10/ema_98000.pt"
             estimator_path = "./saved_models/traj_graders/H240_T100/est_p4_cam_rew_only_corner_gamma100/grader_log/best.pth"
-            diffusion_model = torch.load(diffusion_path).to(global_device_name)
-            ema_diffusion_model = torch.load(ema_path).to(global_device_name)
-            estimator_model = torch.load(estimator_path).to(global_device_name)
+            diffusion_model = torch.load(diffusion_path, map_location=global_device).to(global_device)
+            ema_diffusion_model = torch.load(ema_path, map_location=global_device).to(global_device)
+            estimator_model = torch.load(estimator_path, map_location=global_device).to(global_device)
             red_policy = DiffusionGlobalPlannerHideout(env, diffusion_model, ema_diffusion_model, estimator_model, max_speed=env.fugitive_speed_limit)
         elif heuristic_type == 'AStarLocal':
             red_policy = AStarLocalPlanner(env, max_speed=env.fugitive_speed_limit, cost_coeff=1000)
@@ -331,8 +350,10 @@ def collect_waypoints(epsilon, num_runs,
         if random_cameras:
             path += "_random_cameras"
 
-        if not os.path.exists(path):
-            os.makedirs(path)
+        """if not os.path.exists(path):
+            os.makedirs(path)"""
+        path = os.path.join(path, "train")
+        os.makedirs(path, exist_ok=True)
 
         
         if blue_type == "heuristic":
@@ -353,7 +374,10 @@ def collect_waypoints(epsilon, num_runs,
         seed = 0
         np.random.seed(seed)
         random.seed(seed)
-        torch.manual_seed(seed)
+
+
+        noise_seed = 0
+        torch.manual_seed(noise_seed)
 
         incremental_dataset = NAgentsIncrementalDataset(env)
 
@@ -362,7 +386,7 @@ def collect_waypoints(epsilon, num_runs,
         imgs = []
 
         downsample_ratio, waypt_num = 4, 10
-        traj_num = 75 # 150
+        traj_num = 1 # 150
         for traj_idx in range(traj_num):
             if heuristic_type == 'RRTStarOnly':
                 red_locs = red_policy.global_plan(downsample_ratio, waypt_num, env.get_fugitive_observation())
@@ -370,11 +394,14 @@ def collect_waypoints(epsilon, num_runs,
                 red_locs = np.array(red_policy.get_scaled_path(plot=False))
             else:
                 raise NotImplementedError
+            
+            """
             plt.plot(red_locs[:,0], red_locs[:,1])
             plt.imshow(env.custom_render_canvas(show=False, option=["terrain", "cameras", "hideouts"], large_icons=False), extent=(0, 2428, 0, 2428))
             plt.axis("off")
         plt.xlim(0, 2428)
         plt.ylim(0, 2428)
+        """
         # plt.show()
         # INFO: Following are collecting the RRT paths into datasets
         red_locations.append(red_locs)
@@ -382,7 +409,7 @@ def collect_waypoints(epsilon, num_runs,
         hideout_observations.append(np.concatenate([np.expand_dims(np.array(env.hideout_locations), axis=0)]*waypt_num, axis=0))
         # plt.savefig("diverse_rrt_paths.png", bbox_inches='tight')
         if not got_stuck:
-            np.savez(path + f"/seed_{seed}_known_{env.num_known_cameras}_unknown_{env.num_unknown_cameras}.npz", 
+            np.savez(path + f"/seed_{loop_seed}_known_{env.num_known_cameras}_unknown_{env.num_unknown_cameras}.npz", 
                 hideout_observations=hideout_observations,
                 timestep_observations=timestep_observations, 
                 red_locations=red_locations,
@@ -442,8 +469,10 @@ def collect_time(epsilon, num_runs,
         
         # MDN_filter = load_filter(filtering_model_config="./configs/IROS_2023/sel_mlp.yaml", filtering_model_path="./blue_bc/saved_models/high_speed_corner_fromVel_combined_success/best.pth", device="cuda")
         # env.set_filter(filter_model=MDN_filter) 
-        if not os.path.exists(path):
-            os.makedirs(path)
+        """if not os.path.exists(path):
+            os.makedirs(path)"""
+        path = os.path.join(path, "train")
+        os.makedirs(path, exist_ok=True)
 
         
         if blue_type == "heuristic":
@@ -520,3 +549,4 @@ if __name__ == "__main__":
 
     collect_waypoints(epsilon, num_runs, starting_seed, random_cameras, folder_name, heuristic_type, blue_type, env_path, show=False)
     # collect_time(epsilon, num_runs, starting_seed, random_cameras, folder_name, heuristic_type, blue_type, env_path, show=False)
+## Replace any remaining .to(global_device_name) with .to(global_device)

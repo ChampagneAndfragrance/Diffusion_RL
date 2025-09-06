@@ -229,6 +229,7 @@ buffers/
 IRL/videos/*
 IRL/expert_trajectories/*
 IRL/trained_params/*
+logs/
 
 #python pickles
 *.pkl
@@ -280,3 +281,10 @@ mlruns*/
 wandb/
 AAMAS_2023_logs/
 map_construction/
+
+#setup
+diffusion-rl-venv/
+requirements.txt
+parallel_run.sh
+
+
