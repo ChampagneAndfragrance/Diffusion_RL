@@ -95,47 +95,55 @@ def red_diffusion_train(epsilon, num_runs,
 
         for ep_i in range(epoch_num):
             diffusion_train_losses = []
+            diffusion_model.train()
 
             for _, batch in tqdm(enumerate(diffusion_train_dataloader), total=len(diffusion_train_dataloader)):
                 # move batch to selected device (mps/cuda/cpu)
                 batch = to_device(batch, global_device)
                 # forward + backward + step
                 diffusion_loss, infos = diffusion_model.loss(*batch)
-                diffusion_optimizer.zero_grad()
+                diffusion_optimizer.zero_grad(set_to_none=True)
                 diffusion_loss.backward()
                 torch.nn.utils.clip_grad_norm_(diffusion_model.parameters(), 0.1)
                 diffusion_optimizer.step()
-                # store detached loss to avoid holding graph refs
-                diffusion_train_losses.append(diffusion_loss.detach().cpu())
+                # store as a Python float to avoid holding graph refs
+                diffusion_train_losses.append(float(diffusion_loss.detach()))
 
-            # default valid to train so logging is defined every epoch
-            diffusion_valid_losses = diffusion_train_losses
-
+            # validation (optional this epoch)
+            ran_validation = False
+            diffusion_valid_losses = None
             if ep_i % validation_epoch_period == 0:
+                ran_validation = True
                 diffusion_valid_losses = []
+                diffusion_model.eval()
                 with torch.no_grad():
                     for _, batch in tqdm(enumerate(diffusion_valid_dataloader), total=len(diffusion_valid_dataloader)):
                         batch = to_device(batch, global_device)
                         diffusion_loss, infos = diffusion_model.loss(*batch)
-                        diffusion_valid_losses.append(diffusion_loss.detach().cpu())
-
+                        diffusion_valid_losses.append(float(diffusion_loss.detach()))
+                diffusion_model.train()
+            
             # compute means safely
-            mean_train = torch.stack(diffusion_train_losses).mean().item()
-            mean_valid = torch.stack(diffusion_valid_losses).mean().item()
-
-            # save best model
-            if mean_valid < min_valid_loss:
+            mean_train = float(np.mean(diffusion_train_losses)) if len(diffusion_train_losses) else float("inf")
+            mean_valid = float(np.mean(diffusion_valid_losses)) if ran_validation else None
+            
+            # save best model only when we have a true validation measurement
+            if ran_validation and (mean_valid < min_valid_loss):
                 min_valid_loss = mean_valid
-                # save into the run folder
                 torch.save(diffusion_model, path + "/diffusion.pth")
-                # and also save/update a public checkpoint for inference scripts
                 torch.save(diffusion_model, os.path.join(public_ckpt_dir, "diffusion.pth"))
-
+            
             # log
-            writer.add_scalars('loss', {'train_loss': mean_train, 'valid_loss': mean_valid}, ep_i)
+            scalars = {'train_loss': mean_train}
+            if ran_validation:
+                scalars['valid_loss'] = mean_valid
+            writer.add_scalars('loss', scalars, ep_i)
             print("Trajectory eps:", ep_i)
             print("min_valid_loss:", min_valid_loss)
-
+            
+            # Optional: keep MPS memory tidy
+            if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                torch.mps.empty_cache()
         
 
 def red_diffusion_test():

@@ -23,7 +23,7 @@ from SAC.sac import SAC
 from red_bc.heuristic import BlueHeuristic
 
 
-matplotlib.use('TkAgg')
+matplotlib.use("Agg")
 import matplotlib.pylab
 from utils import save_video
 from config_loader import config_loader
@@ -35,6 +35,21 @@ from diffuser.datasets.multipath import NAgentsIncrementalDataset
 from fugitive_policies.diffusion_policy import DiffusionStateOnlyGlobalPlanner
 
 from enum import Enum, auto
+
+# --- Device selection helper and globals ---
+def _select_device():
+    try:
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return "mps"
+    except Exception:
+        pass
+    if torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
+
+global_device_name = _select_device()
+global_device = torch.device(global_device_name)
+print(f"[Device] Using {global_device_name} (MPS available: {getattr(torch.backends, 'mps', None) and torch.backends.mps.is_available()}, CUDA available: {torch.cuda.is_available()})")
 
 
 def red_rl_baseline(config, env_config):
@@ -59,7 +74,7 @@ def red_rl_baseline(config, env_config):
     with open(parameter_dir / "parameters_env.yaml", 'w') as para_yaml:
         yaml.dump(env_config, para_yaml, default_flow_style=False)
     # INFO: Load the environment
-    device = 'cuda' if config["environment"]["cuda"] else 'cpu'
+    device = global_device_name
     epsilon = 0.1
     variation = 0
     print("Loaded environment variation %d with seed %d" % (variation, config["environment"]["seed"]))
@@ -106,7 +121,7 @@ def red_rl_baseline(config, env_config):
         recent_episode = 0
 
     # INFO: Initialize the buffer
-    replay_buffer = ReplayBuffer(config["train"]["buffer_size"], agent_num, buffer_dims=obs_ac_dims, is_cuda=config["environment"]["cuda"])
+    replay_buffer = ReplayBuffer(config["train"]["buffer_size"], agent_num, buffer_dims=obs_ac_dims, is_cuda=torch.cuda.is_available())
     for ep in range(recent_episode, config["train"]["episode_num"]):
         maddpg.prep_rollouts(device=device)
         explr_pct_remaining = max(0, config["train"]["n_exploration_eps"] - ep) / config["train"]["n_exploration_eps"]
@@ -128,13 +143,13 @@ def red_rl_baseline(config, env_config):
             t = t + 1
             if ep % config["train"]["video_step"] == 0:
                 # INFO: Check the video at first to see if there is anything wrong
-                torch_red_observation = [Variable(torch.Tensor(red_observation[i]), requires_grad=False).to(device) for i in range(maddpg.nagents)]
+                torch_red_observation = [torch.as_tensor(red_observation[i], dtype=torch.float32, device=global_device) for i in range(maddpg.nagents)]
                 torch_agent_actions = maddpg.step(torch_red_observation, explore=True)
                 agent_actions = [ac.data.cpu().numpy() for ac in torch_agent_actions] # agent actions for all robots, each element is an array with dimension 5
                 next_red_observation, rewards, done, i, _, red_detected_flag = env.step(split_red_directions_to_direction_speed((np.concatenate(agent_actions))))
             else:
                 # INFO: Use the same policy to explore
-                torch_red_observation = [Variable(torch.Tensor(red_observation[i]), requires_grad=False).to(device) for i in range(maddpg.nagents)]
+                torch_red_observation = [torch.as_tensor(red_observation[i], dtype=torch.float32, device=global_device) for i in range(maddpg.nagents)]
                 torch_agent_actions = maddpg.step(torch_red_observation, explore=True)
                 agent_actions = [ac.data.cpu().numpy() for ac in torch_agent_actions] # agent actions for all robots, each element is an array with dimension 5
                 next_red_observation, rewards, done, i, _, red_detected_flag = env.step(split_red_directions_to_direction_speed((np.concatenate(agent_actions))))
@@ -162,16 +177,19 @@ def red_rl_baseline(config, env_config):
             maddpg.save(base_dir / ("model.pth"))
 
         if len(replay_buffer) >= 2 * config["train"]["batch_size"]: # update every config["train"]["steps_per_update"] steps
-            if config["environment"]["cuda"]:
+            if torch.cuda.is_available():
                 maddpg.prep_training(device='gpu')
             else:
                 maddpg.prep_training(device='cpu')
 
             for a_i in range(maddpg.nagents):
-                sample = replay_buffer.sample(config["train"]["batch_size"], to_gpu=config["environment"]["cuda"], norm_rews=False)
+                sample = replay_buffer.sample(config["train"]["batch_size"], to_gpu=torch.cuda.is_available(), norm_rews=False)
                 maddpg.update(sample, a_i, train_option="regular", logger=logger)
 
             maddpg.update_all_targets()
+        # Empty MPS cache if needed
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            torch.mps.empty_cache()
         ep_rews = replay_buffer.get_average_rewards(t)
         for a_i, a_ep_rew in enumerate(ep_rews):
             logger.add_scalar('agent%i/mean_episode_rewards' % a_i, a_ep_rew, ep)
@@ -200,7 +218,7 @@ def red_rl_baseline_sac(config, env_config):
     with open(parameter_dir / "parameters_env.yaml", 'w') as para_yaml:
         yaml.dump(env_config, para_yaml, default_flow_style=False)
     # INFO: Load the environment
-    device = 'cuda' if config["environment"]["cuda"] else 'cpu'
+    device = global_device_name
     epsilon = 0.1
     variation = 0
     print("Loaded environment variation %d with seed %d" % (variation, config["environment"]["seed"]))
@@ -245,7 +263,7 @@ def red_rl_baseline_sac(config, env_config):
         recent_episode = 0
 
     # INFO: Initialize the buffer
-    replay_buffer = ReplayBuffer(config["train"]["buffer_size"], agent_num, buffer_dims=obs_ac_dims, is_cuda=config["environment"]["cuda"])
+    replay_buffer = ReplayBuffer(config["train"]["buffer_size"], agent_num, buffer_dims=obs_ac_dims, is_cuda=torch.cuda.is_available())
     for ep in range(recent_episode, config["train"]["episode_num"]):
 
         # INFO: Start a new episode
@@ -261,13 +279,13 @@ def red_rl_baseline_sac(config, env_config):
             t = t + 1
             if ep % config["train"]["video_step"] == 0:
                 # INFO: Use the same policy to explore
-                torch_red_observation = [Variable(torch.Tensor(red_observation[i]), requires_grad=False).to(device) for i in range(agent_num)]
+                torch_red_observation = [torch.as_tensor(red_observation[i], dtype=torch.float32, device=global_device) for i in range(agent_num)]
                 torch_agent_actions = sac.select_action(torch_red_observation)
                 agent_actions = [ac.data.cpu().numpy() for ac in torch_agent_actions] # agent actions for all robots, each element is an array with dimension 5
                 next_red_observation, rewards, done, i, _, red_detected_flag = env.step(split_red_directions_to_direction_speed((np.concatenate(agent_actions))))
             else:
                 # INFO: Use the same policy to explore
-                torch_red_observation = [Variable(torch.Tensor(red_observation[i]), requires_grad=False).to(device) for i in range(agent_num)]
+                torch_red_observation = [torch.as_tensor(red_observation[i], dtype=torch.float32, device=global_device) for i in range(agent_num)]
                 torch_agent_actions = sac.select_action(torch_red_observation)
                 agent_actions = [ac.data.cpu().numpy() for ac in torch_agent_actions] # agent actions for all robots, each element is an array with dimension 5
                 next_red_observation, rewards, done, i, _, red_detected_flag = env.step(split_red_directions_to_direction_speed((np.concatenate(agent_actions))))
@@ -296,9 +314,12 @@ def red_rl_baseline_sac(config, env_config):
 
         if len(replay_buffer) >= 2 * config["train"]["batch_size"]: # update every config["train"]["steps_per_update"] steps
             for a_i in range(agent_num):
-                sample = replay_buffer.sample(config["train"]["batch_size"], to_gpu=config["environment"]["cuda"], norm_rews=False)
+                sample = replay_buffer.sample(config["train"]["batch_size"], to_gpu=torch.cuda.is_available(), norm_rews=False)
                 sac.update_bl(sample, a_i, train_option="regular", logger=logger)
 
+        # Empty MPS cache if needed
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            torch.mps.empty_cache()
         ep_rews = replay_buffer.get_average_rewards(t)
         for a_i, a_ep_rew in enumerate(ep_rews):
             logger.add_scalar('agent%i/mean_episode_rewards' % a_i, a_ep_rew, ep)
@@ -330,7 +351,7 @@ def red_rl_piece_sac(config, env_config):
         yaml.dump(env_config, para_yaml, default_flow_style=False)
 
     # INFO: Load the environment
-    device = 'cuda' if config["environment"]["cuda"] else 'cpu'
+    device = global_device_name
     epsilon = 0.1
     variation = 0
     print("Loaded environment variation %d with seed %d" % (variation, config["environment"]["seed"]))
@@ -380,7 +401,7 @@ def red_rl_piece_sac(config, env_config):
         recent_episode = 0
 
     # INFO: Initialize the buffer
-    replay_buffer = ReplayBuffer(config["train"]["buffer_size"], agent_num, buffer_dims=obs_ac_dims, is_cuda=config["environment"]["cuda"])
+    replay_buffer = ReplayBuffer(config["train"]["buffer_size"], agent_num, buffer_dims=obs_ac_dims, is_cuda=torch.cuda.is_available())
     for ep in range(recent_episode, config["train"]["episode_num"]):
 
         # INFO: Set the dist penalty coefficient
@@ -404,7 +425,7 @@ def red_rl_piece_sac(config, env_config):
 
             if ep % config["train"]["video_step"] == 0:
                 # INFO: Use diffusion guidance
-                torch_red_observation = [Variable(torch.Tensor(red_observation[i]), requires_grad=False).to(device) for i in range(agent_num)]
+                torch_red_observation = [torch.as_tensor(red_observation[i], dtype=torch.float32, device=global_device) for i in range(agent_num)]
                 # to_waypt_vec_normalized = torch_red_observation[0][-3:-1] / (torch.linalg.norm(torch_red_observation[0][-3:-1]) + 1e-3)
                 # torch_agent_actions = [to_waypt_vec_normalized]
                 torch_agent_actions = sac.select_action(torch_red_observation)
@@ -412,7 +433,7 @@ def red_rl_piece_sac(config, env_config):
                 next_red_observation, rewards, done, i, _, red_detected_flag = env.step(split_red_directions_to_direction_speed((np.concatenate(agent_actions))))
             else:
                 # INFO: Use diffusion guidance
-                torch_red_observation = [Variable(torch.Tensor(red_observation[i]), requires_grad=False).to(device) for i in range(agent_num)]
+                torch_red_observation = [torch.as_tensor(red_observation[i], dtype=torch.float32, device=global_device) for i in range(agent_num)]
                 # to_waypt_vec_normalized = torch_red_observation[0][-3:-1] / (torch.linalg.norm(torch_red_observation[0][-3:-1]) + 1e-3)
                 # torch_agent_actions = [to_waypt_vec_normalized]
                 torch_agent_actions = sac.select_action(torch_red_observation)
@@ -444,9 +465,12 @@ def red_rl_piece_sac(config, env_config):
 
         if len(replay_buffer) >= 2 * config["train"]["batch_size"]:
             for a_i in range(agent_num):
-                sample = replay_buffer.sample(config["train"]["batch_size"], to_gpu=config["environment"]["cuda"], norm_rews=False)
+                sample = replay_buffer.sample(config["train"]["batch_size"], to_gpu=torch.cuda.is_available(), norm_rews=False)
                 sac.update_bl(sample, a_i, train_option="regular", logger=logger)
 
+        # Empty MPS cache if needed
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            torch.mps.empty_cache()
         ep_rews = replay_buffer.get_average_rewards(t)
         for a_i, a_ep_rew in enumerate(ep_rews):
             logger.add_scalar('agent%i/mean_episode_rewards' % a_i, a_ep_rew, ep)
