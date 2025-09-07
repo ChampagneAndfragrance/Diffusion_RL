@@ -14,14 +14,34 @@ from diffuser.datasets.multipath import StateOnlyDataset
 from diffuser.models.diffusion import GaussianDiffusion
 from diffuser.models.single_state import SingleStateNet
 from torch.utils.tensorboard import SummaryWriter
+import matplotlib
+matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 
 import argparse
 import random
 import time
 
-global_device_name = "cuda"
-global_device = torch.device("cuda")
+def _select_device():
+    try:
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return "mps"
+    except Exception:
+        pass
+    if torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
+
+def to_device(x, device):
+    if torch.is_tensor(x): return x.to(device)
+    if isinstance(x, (list, tuple)): return type(x)(to_device(t, device) for t in x)
+    if isinstance(x, dict): return {k: to_device(v, device) for k, v in x.items()}
+    return x
+
+global_device_name = _select_device()
+global_device = torch.device(global_device_name)
+print(f"[Device] Using {global_device_name} (MPS available: {getattr(torch.backends, 'mps', None) and torch.backends.mps.is_available()}, CUDA available: {torch.cuda.is_available()})")
+
 
 mse_loss_func = torch.nn.MSELoss()
 
@@ -41,13 +61,13 @@ def red_diffusion_train(epsilon, num_runs,
     
     """
 
-    diffusion_train_dataset = StateOnlyDataset(folder_path="./datasets/balance_game/gnn_map_0_run_10000_RRTStarOnly/train", 
+    diffusion_train_dataset = StateOnlyDataset(folder_path="./datasets/balance_game/gnn_map_0_run_1_RRTStarOnly/train", 
                                          horizon=10,
                                          dataset_type = "prisoner_globe",
                                          include_start_detection = True,
                                          condition_path = True,
                                          max_trajectory_length=10,)
-    diffusion_valid_dataset = StateOnlyDataset(folder_path="./datasets/balance_game/gnn_map_0_run_10000_RRTStarOnly/valid", 
+    diffusion_valid_dataset = StateOnlyDataset(folder_path="./datasets/balance_game/gnn_map_0_run_1_RRTStarOnly/valid", 
                                          horizon=10,
                                          dataset_type = "prisoner_globe",
                                          include_start_detection = True,
@@ -58,9 +78,12 @@ def red_diffusion_train(epsilon, num_runs,
         path = f"./RAL_2024_logs/{folder_name}/start_seed_{starting_seed}_run_{num_runs}_{heuristic_type}"
         os.makedirs(path, exist_ok=True)
         writer = SummaryWriter(path+"/logs")
+        # also keep a copy in a stable location
+        public_ckpt_dir = "./saved_models/diffusions"
+        os.makedirs(public_ckpt_dir, exist_ok=True)
         # INFO: Red-only diffusions
-        diffusion_net = SingleStateNet(transition_dim=2, horizon=10, global_cond_dim=8, lstm_out_dim=None, num_agents=1)
-        diffusion_model = GaussianDiffusion(model=diffusion_net, horizon=10, observation_dim=2, action_dim=0, n_timesteps=10, predict_epsilon=False)
+        diffusion_net = SingleStateNet(transition_dim=2, horizon=10, global_cond_dim=8, lstm_out_dim=None, num_agents=1).to(global_device)
+        diffusion_model = GaussianDiffusion(model=diffusion_net, horizon=10, observation_dim=2, action_dim=0, n_timesteps=10, predict_epsilon=False).to(global_device)
         diffusion_optimizer = Adam(diffusion_model.parameters(), lr=0.00002, weight_decay=0.0005)
 
         diffusion_train_dataloader = (torch.utils.data.DataLoader(diffusion_train_dataset, batch_size=128, num_workers=0, shuffle=True, pin_memory=False, collate_fn=diffusion_train_dataset.collate_fn))
@@ -72,32 +95,46 @@ def red_diffusion_train(epsilon, num_runs,
 
         for ep_i in range(epoch_num):
             diffusion_train_losses = []
-            
-            for traj_ep, batches_seqLen_agentLocations in tqdm(enumerate(diffusion_train_dataloader)):
-                # INFO: This part is to continue training the diffusion model with the new ground truth trajectories (prisoner follows guided sampling)
-                diffusion_loss, infos = diffusion_model.loss(*batches_seqLen_agentLocations)
+
+            for _, batch in tqdm(enumerate(diffusion_train_dataloader), total=len(diffusion_train_dataloader)):
+                # move batch to selected device (mps/cuda/cpu)
+                batch = to_device(batch, global_device)
+                # forward + backward + step
+                diffusion_loss, infos = diffusion_model.loss(*batch)
                 diffusion_optimizer.zero_grad()
                 diffusion_loss.backward()
-                torch.nn.utils.clip_grad_norm(diffusion_model.parameters(), 0.1)
+                torch.nn.utils.clip_grad_norm_(diffusion_model.parameters(), 0.1)
                 diffusion_optimizer.step()
-                # print("diffusion_loss = ", diffusion_loss)
-                diffusion_train_losses.append(diffusion_loss)
+                # store detached loss to avoid holding graph refs
+                diffusion_train_losses.append(diffusion_loss.detach().cpu())
+
+            # default valid to train so logging is defined every epoch
+            diffusion_valid_losses = diffusion_train_losses
 
             if ep_i % validation_epoch_period == 0:
                 diffusion_valid_losses = []
                 with torch.no_grad():
-                    for traj_ep, batches_seqLen_agentLocations in tqdm(enumerate(diffusion_valid_dataloader)):
-                        # INFO: This part is to valid the training process
-                        diffusion_loss, infos = diffusion_model.loss(*batches_seqLen_agentLocations)
-                        diffusion_valid_losses.append(diffusion_loss)                
+                    for _, batch in tqdm(enumerate(diffusion_valid_dataloader), total=len(diffusion_valid_dataloader)):
+                        batch = to_device(batch, global_device)
+                        diffusion_loss, infos = diffusion_model.loss(*batch)
+                        diffusion_valid_losses.append(diffusion_loss.detach().cpu())
 
-            if torch.Tensor(diffusion_valid_losses).mean().item() < min_valid_loss:
-                min_valid_loss = torch.Tensor(diffusion_valid_losses).mean().item()
-                torch.save(diffusion_model, path+"/diffusion.pth")
+            # compute means safely
+            mean_train = torch.stack(diffusion_train_losses).mean().item()
+            mean_valid = torch.stack(diffusion_valid_losses).mean().item()
 
-            writer.add_scalars('loss', {'train_loss': torch.Tensor(diffusion_train_losses).mean().item(), 'valid_loss': torch.Tensor(diffusion_valid_losses).mean().item()}, ep_i)
-            print("Trajectory eps: ", ep_i)
-            print("min_valid_loss: ", min_valid_loss)
+            # save best model
+            if mean_valid < min_valid_loss:
+                min_valid_loss = mean_valid
+                # save into the run folder
+                torch.save(diffusion_model, path + "/diffusion.pth")
+                # and also save/update a public checkpoint for inference scripts
+                torch.save(diffusion_model, os.path.join(public_ckpt_dir, "diffusion.pth"))
+
+            # log
+            writer.add_scalars('loss', {'train_loss': mean_train, 'valid_loss': mean_valid}, ep_i)
+            print("Trajectory eps:", ep_i)
+            print("min_valid_loss:", min_valid_loss)
 
         
 
@@ -116,14 +153,15 @@ def red_diffusion_test():
 
         return new_paths
 
-    diffusion_dataset = StateOnlyDataset(folder_path="./datasets/balance_game/gnn_map_0_run_10000_RRTStarOnly/test", 
+    diffusion_dataset = StateOnlyDataset(folder_path="./datasets/balance_game/gnn_map_0_run_1_RRTStarOnly/test", 
                                          horizon=10,
                                          dataset_type = "prisoner_globe",
                                          include_start_detection = True,
                                          condition_path = True,
                                          max_trajectory_length=10,)
 
-    diffusion_model = torch.load("./saved_models/diffusions/diffusion.pth")
+    diffusion_model = torch.load("./saved_models/diffusions/diffusion.pth", map_location=global_device)
+    diffusion_model.to(global_device).eval()
     
     # INFO: draw samples from current diffusion model
     env = load_environment(env_path)
@@ -131,6 +169,8 @@ def red_diffusion_test():
     env.reset(seed=3) # 3, 6
     hideout_division = [50, 50, 50] # [0, 0, 1], [25, 25, 25]
     global_cond, local_cond = env.construct_diffusion_conditions(cond_on_hideout_num=hideout_division)
+    global_cond = to_device(global_cond, global_device)  
+    local_cond  = to_device(local_cond,  global_device)
 
     # INFO: set random seed for the diffusion denoise process
     seed = 0
@@ -143,7 +183,7 @@ def red_diffusion_test():
     sample = diffusion_model.conditional_sample(global_cond=global_cond, cond=local_cond, sample_type="constrained")
     end_time = time.time()
     print("Diffusion takes %f seconds." % (end_time-start_time))
-    sample = diffusion_dataset.unnormalize(sample)
+    sample = diffusion_dataset.unnormalize(sample).detach().cpu().numpy()
     dense_path = interpolate_paths(sample, total_dense_path_num=100)
     hideouts = diffusion_dataset.unnormalize(global_cond["hideouts"].reshape(-1, 3, 2)).detach().cpu().numpy()
     starts = diffusion_dataset.unnormalize(global_cond["red_start"]).detach().cpu().numpy()
@@ -217,15 +257,20 @@ if __name__ == "__main__":
     random_cameras=False
 
     env_path = "simulator/configs/balance_game.yaml"
-    # print(agent_observations.shape)
-    # red_diffusion_train(epsilon, 
-    #                      num_runs, 
-    #                      starting_seed, 
-    #                      random_cameras, 
-    #                      folder_name, 
-    #                      heuristic_type, 
-    #                      blue_type, 
-    #                      env_path, 
-    #                      continue_training_estimator_flag, show=True)
-    red_diffusion_test()
-    # red_diffusion_rrt_time_cmp()
+    print("[Run] Starting diffusion training on device:", global_device)
+
+    # run training (this will also save a copy of the best model to ./saved_models/diffusions/diffusion.pth)
+    red_diffusion_train(
+        epsilon,
+        num_runs,
+        starting_seed,
+        random_cameras,
+        folder_name,
+        heuristic_type,
+        blue_type,
+        env_path,
+        continue_training_estimator_flag,
+        show=False
+    )
+    # To evaluate after training, you can comment the above and uncomment the next line:
+    # red_diffusion_test()

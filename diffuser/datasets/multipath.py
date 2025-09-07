@@ -6,22 +6,44 @@ import torch
 import copy
 import random
 from collections import namedtuple
-# from diffuser.utils.rendering import PrisonerRendererGlobe, PrisonerRenderer
-from diffuser.datasets.prisoner import pad_collate_detections, pad_collate_detections_repeat
 
-global_device_name = "cpu"
-global_device = torch.device("cpu")
+# from diffuser.utils.rendering import PrisonerRendererGlobe, PrisonerRenderer
+from diffuser.datasets.prisoner import (
+    pad_collate_detections,
+    pad_collate_detections_repeat,
+)
+
+
+def _select_device():
+    try:
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return "mps"
+    except Exception:
+        pass
+    if torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
+
+
+global_device_name = _select_device()
+global_device = torch.device(global_device_name)
+print(
+    f"[Device] Using {global_device_name} (MPS available: {getattr(torch.backends, 'mps', None) and torch.backends.mps.is_available()}, CUDA available: {torch.cuda.is_available()})"
+)
+
 
 class StateOnlyDataset(torch.utils.data.Dataset):
-    """ Single stream dataset where we cannot tell which agent is which in the detections"""
-    def __init__(self, 
-                 folder_path, 
-                 horizon,
-                 dataset_type = "sponsor",
-                 include_start_detection = False,
-                 condition_path = True,
-                 max_trajectory_length = 4320,
-                 ):
+    """Single stream dataset where we cannot tell which agent is which in the detections"""
+
+    def __init__(
+        self,
+        folder_path,
+        horizon,
+        dataset_type="sponsor",
+        include_start_detection=False,
+        condition_path=True,
+        max_trajectory_length=4320,
+    ):
         print("Loading dataset from: ", folder_path)
 
         # assert global_lstm_include_start # this variable is a remnant from past dataset
@@ -45,49 +67,54 @@ class StateOnlyDataset(torch.utils.data.Dataset):
         self.include_start_detection = include_start_detection
         self.indices = np.arange(self.file_num)
 
-
     def _load_data(self, folder_path):
         self.file_num = 0
         np_files = []
+
+        # Collect file paths (do not open yet)
         fps = get_lowest_root_folders(folder_path)
         for fp in fps:
             for file_name in sorted(os.listdir(fp)):
-                np_file = np.load(os.path.join(fp, file_name), allow_pickle=True)
-                # print(np_file)
-                # self.max_agent_size = max(self.max_agent_size, np.squeeze(np_file["agent_observations"]).shape[1])
-                np_files.append(np_file)
-                self.file_num = self.file_num + 1
+                if file_name.endswith(".npz"):  # only keep npz files
+                    np_files.append(os.path.join(fp, file_name))
+
+        # Set file count for __len__ / indices
+        self.file_num = len(np_files)
 
         self.set_normalization_factors()
-        for np_file in np_files:
-            self._load_file(np_file)
 
-        # print("Path Lengths: ")
-        # print(max(self.path_lengths), min(self.path_lengths))
-        
+        # Open each file with a context manager so it closes immediately
+        for fpath in np_files:
+            with np.load(fpath, allow_pickle=True) as np_file:
+                self._load_file(np_file)
+
         # normalize hideout locations
         if self.dataset_type == "prisoner_globe":
             for i in range(len(self.hideout_locs)):
                 # INFO: find the target hideout for each file
-                target_hideout_loc = self.find_target_hideout(self.hideout_locs[i][0].flatten(), i)
+                target_hideout_loc = self.find_target_hideout(
+                    self.hideout_locs[i][0].flatten(), i
+                )
                 self.target_hideout_locs[i] = self.normalize(target_hideout_loc)
                 self.hideout_locs[i] = self.normalize(self.hideout_locs[i])
 
     def find_target_hideout(self, hideout_loc, path_ind):
         # INFO: find the hideout the prisoner is reaching
-        red_path_terminal_loc = self.unnormalize(self.red_locs[path_ind][-1,:2])
+        red_path_terminal_loc = self.unnormalize(self.red_locs[path_ind][-1, :2])
         hideout_num = len(hideout_loc) // 2
         hideout_reached_id = 0
         hideout_reached_dist = np.inf
         for hideout_id in range(hideout_num):
-            candidate_hideout_loc = hideout_loc[2*hideout_id:2*hideout_id+2]
-            candidate_terminal_error = np.linalg.norm(red_path_terminal_loc - candidate_hideout_loc)
+            candidate_hideout_loc = hideout_loc[2 * hideout_id : 2 * hideout_id + 2]
+            candidate_terminal_error = np.linalg.norm(
+                red_path_terminal_loc - candidate_hideout_loc
+            )
             if candidate_terminal_error < hideout_reached_dist:
                 hideout_reached_dist = candidate_terminal_error
                 hideout_reached_id = hideout_id
             else:
                 pass
-        hideout_loc = hideout_loc[2*hideout_reached_id:2*hideout_reached_id+2]
+        hideout_loc = hideout_loc[2 * hideout_reached_id : 2 * hideout_reached_id + 2]
         return hideout_loc
 
     def set_normalization_factors(self):
@@ -130,7 +157,7 @@ class StateOnlyDataset(torch.utils.data.Dataset):
         # obs[..., 3] = ((y_1 + 1) / 2) * (self.max_y - self.min_y) + self.min_y
 
         return obs
-    
+
     def unnormalize_single_dim(self, obs):
         x = obs[..., 0]
         obs[..., 0] = ((x + 1) / 2) * (self.max_x - self.min_x) + self.min_x
@@ -139,7 +166,7 @@ class StateOnlyDataset(torch.utils.data.Dataset):
         obs[..., 1] = ((y + 1) / 2) * (self.max_y - self.min_y) + self.min_y
 
         return obs
-    
+
     def select_random_rows(self, array, n):
         b, m = array.shape
 
@@ -153,7 +180,7 @@ class StateOnlyDataset(torch.utils.data.Dataset):
         remaining_indices = indices[n:]
 
         selected_rows = np.full((n, m), -np.inf)
-        selected_rows[:len(selected_indices)] = array[selected_indices]
+        selected_rows[: len(selected_indices)] = array[selected_indices]
 
         result = np.copy(array)
         result[remaining_indices] = -np.inf
@@ -191,27 +218,30 @@ class StateOnlyDataset(torch.utils.data.Dataset):
                 self.target_hideout_locs.append(hideout_locs)
 
     def convert_global_for_lstm(self, global_cond_idx, global_cond, start):
-        """ Convert the indices back to timesteps and concatenate them together"""
+        """Convert the indices back to timesteps and concatenate them together"""
         detection_num = min(self.max_detection_num, len(global_cond_idx))
         global_cond_idx = global_cond_idx[-detection_num:]
         global_cond = global_cond[-detection_num:]
 
         # no detections before start, just pad with -1, -1
         # assert len(global_cond_idx) != 0
-            # return torch.tensor([[-1, -1, -1, -1, -1]])
+        # return torch.tensor([[-1, -1, -1, -1, -1]])
         if len(global_cond_idx) == 0:
-            return -1 * torch.ones((1, 213)) # 229 for 5s1h, 213 for 1s1h
+            return -1 * torch.ones((1, 213))  # 229 for 5s1h, 213 for 1s1h
         # convert the indices back to timesteps
-        global_cond_idx_adjusted = (start - global_cond_idx) / self.max_trajectory_length
-        global_cond = np.concatenate((global_cond_idx_adjusted[:, None], global_cond), axis=1)
-
+        global_cond_idx_adjusted = (
+            start - global_cond_idx
+        ) / self.max_trajectory_length
+        global_cond = np.concatenate(
+            (global_cond_idx_adjusted[:, None], global_cond), axis=1
+        )
 
         return torch.tensor(global_cond).float()
 
     def get_conditions(self, idx):
-        '''
-            condition on current observation for planning
-        '''
+        """
+        condition on current observation for planning
+        """
 
         # INFO: get current path red loc
         red_loc = self.red_locs[idx]
@@ -228,7 +258,7 @@ class StateOnlyDataset(torch.utils.data.Dataset):
             idxs = np.array([])
             detects = np.array([])
 
-        return(idxs, detects)
+        return (idxs, detects)
 
     def __len__(self):
         return len(self.indices)
@@ -245,7 +275,7 @@ class StateOnlyDataset(torch.utils.data.Dataset):
 
         global_cond = hideout_loc[0].flatten()
 
-        prisoner_at_start = np.array(self.red_locs[path_ind][0,:2])
+        prisoner_at_start = np.array(self.red_locs[path_ind][0, :2])
 
         batch = (prisoner_locs, global_cond, local_cond, prisoner_at_start)
         return batch
@@ -258,10 +288,13 @@ class StateOnlyDataset(torch.utils.data.Dataset):
         global_cond = torch.tensor(np.stack(global_cond, axis=0))
 
         # Pass this to condition our models rather than pass them separately
-        global_dict = {"hideouts": global_cond.to(global_device_name), "red_start": torch.Tensor(prisoner_at_start).to(global_device_name)}
+        global_dict = {
+            "hideouts": global_cond.to(global_device_name),
+            "red_start": torch.Tensor(prisoner_at_start).to(global_device_name),
+        }
 
         return path, global_dict, local_cond
-    
+
     def collate_fn_repeat(self, batch, num_samples):
         (global_cond, local_cond, prisoner_at_start) = zip(*batch)
 
@@ -271,29 +304,35 @@ class StateOnlyDataset(torch.utils.data.Dataset):
         local_cond = list(local_cond) * num_samples
 
         # INFO: This is for red traj only
-        global_dict = {"hideouts": global_cond.to(global_device_name), 
-            "red_start": torch.Tensor(prisoner_at_start).to(global_device_name).repeat_interleave(repeats=num_samples, dim=0)}
+        global_dict = {
+            "hideouts": global_cond.to(global_device_name),
+            "red_start": torch.Tensor(prisoner_at_start)
+            .to(global_device_name)
+            .repeat_interleave(repeats=num_samples, dim=0),
+        }
 
         return global_dict, local_cond
 
-class NAgentsSingleDataset(torch.utils.data.Dataset):
-    """ Single stream dataset where we cannot tell which agent is which in the detections"""
-    def __init__(self, 
-                 folder_path, 
-                 horizon,
-                 normalizer,
-                 preprocess_fns,
-                 use_padding,
-                 max_path_length,
-                 dataset_type = "sponsor",
-                 include_start_detection = False,
-                 global_lstm_include_start = False,
-                 condition_path = True,
-                 max_detection_num = 32,
-                 max_trajectory_length = 4320,
-                 num_detections = 16,
 
-                 ):
+class NAgentsSingleDataset(torch.utils.data.Dataset):
+    """Single stream dataset where we cannot tell which agent is which in the detections"""
+
+    def __init__(
+        self,
+        folder_path,
+        horizon,
+        normalizer,
+        preprocess_fns,
+        use_padding,
+        max_path_length,
+        dataset_type="sponsor",
+        include_start_detection=False,
+        global_lstm_include_start=False,
+        condition_path=True,
+        max_detection_num=32,
+        max_trajectory_length=4320,
+        num_detections=16,
+    ):
         print("Loading dataset from: ", folder_path)
 
         self.global_lstm_include_start = global_lstm_include_start
@@ -326,10 +365,10 @@ class NAgentsSingleDataset(torch.utils.data.Dataset):
         self.indices = self.make_indices(self.path_lengths, horizon)
 
     def make_indices(self, path_lengths, horizon):
-        '''
-            makes indices for sampling from dataset;
-            each index maps to a datapoint
-        '''
+        """
+        makes indices for sampling from dataset;
+        each index maps to a datapoint
+        """
         indices = []
         for i, path_length in enumerate(path_lengths):
             max_start = min(path_length - 1, self.max_path_length - horizon)
@@ -341,25 +380,27 @@ class NAgentsSingleDataset(torch.utils.data.Dataset):
         indices = np.array(indices)
         return indices
 
-
     def _load_data(self, folder_path):
 
-        np_files = []
+        self.file_num = 0
         fps = get_lowest_root_folders(folder_path)
+
+        file_paths = []
         for fp in fps:
             for file_name in sorted(os.listdir(fp)):
-                np_file = np.load(os.path.join(fp, file_name), allow_pickle=True)
-                # print(np_file)
-                # self.max_agent_size = max(self.max_agent_size, np.squeeze(np_file["agent_observations"]).shape[1])
-                np_files.append(np_file)
+                if file_name.endswith(".npz"):               # (optional) filter
+                    file_paths.append(os.path.join(fp, file_name))
 
+        self.file_num = len(file_paths)
         self.set_normalization_factors()
-        for np_file in np_files:
-            self._load_file(np_file)
+
+        for fpath in file_paths:
+            with np.load(fpath, allow_pickle=True) as np_file:
+                self._load_file(np_file)
 
         print("Path Lengths: ")
         print(max(self.path_lengths), min(self.path_lengths))
-        
+
         self.process_detections()
 
         # after processing detections, we can pad
@@ -367,8 +408,10 @@ class NAgentsSingleDataset(torch.utils.data.Dataset):
             for i in range(len(self.agent_locs)):
                 # need to add padding to the end of the red_locs
                 # self.agent_locs[i] = np.pad(self.agent_locs[i], ((0, self.horizon), (0, 0)), 'constant', constant_values=self.agent_locs[i][-1])
-                self.agent_locs[i] = np.pad(self.agent_locs[i], ((0, self.horizon), (0, 0)), 'edge')
-        
+                self.agent_locs[i] = np.pad(
+                    self.agent_locs[i], ((0, self.horizon), (0, 0)), "edge"
+                )
+
         # normalize hideout locations
         if self.dataset_type == "prisoner_globe":
             for i in range(len(self.hideout_locs)):
@@ -414,7 +457,7 @@ class NAgentsSingleDataset(torch.utils.data.Dataset):
         # obs[..., 3] = ((y_1 + 1) / 2) * (self.max_y - self.min_y) + self.min_y
 
         return obs
-    
+
     def unnormalize_single_dim(self, obs):
         x = obs[..., 0]
         obs[..., 0] = ((x + 1) / 2) * (self.max_x - self.min_x) + self.min_x
@@ -441,7 +484,7 @@ class NAgentsSingleDataset(torch.utils.data.Dataset):
             detects = np.stack(detects, axis=0)
             indices = np.stack(indices, axis=0)
             self.detected_dics.append((indices, detects))
-    
+
     def select_random_rows(self, array, n):
         b, m = array.shape
 
@@ -455,7 +498,7 @@ class NAgentsSingleDataset(torch.utils.data.Dataset):
         remaining_indices = indices[n:]
 
         selected_rows = np.full((n, m), -np.inf)
-        selected_rows[:len(selected_indices)] = array[selected_indices]
+        selected_rows[: len(selected_indices)] = array[selected_indices]
 
         result = np.copy(array)
         result[remaining_indices] = -np.inf
@@ -468,7 +511,9 @@ class NAgentsSingleDataset(torch.utils.data.Dataset):
         detected_locations = file["detected_locations"]
         red_locs = np.float32(file["red_locations"])
         blue_locs = np.float32(file["blue_locations"])
-        agent_locs = np.concatenate((np.expand_dims(red_locs, axis=1), blue_locs), axis=1)
+        agent_locs = np.concatenate(
+            (np.expand_dims(red_locs, axis=1), blue_locs), axis=1
+        )
 
         if red_locs.shape[-1] == 4:
             print(file)
@@ -477,7 +522,6 @@ class NAgentsSingleDataset(torch.utils.data.Dataset):
         path_length = len(agent_locs)
         if path_length > self.max_trajectory_length:
             raise ValueError("Path length is greater than max trajectory length")
-
 
         agents = []
         for i in range(agent_locs.shape[1]):
@@ -517,33 +561,36 @@ class NAgentsSingleDataset(torch.utils.data.Dataset):
                 self.hideout_locs.append(hideout_locs)
 
     def convert_global_for_lstm(self, global_cond_idx, global_cond, start):
-        """ Convert the indices back to timesteps and concatenate them together"""
+        """Convert the indices back to timesteps and concatenate them together"""
         detection_num = min(self.max_detection_num, len(global_cond_idx))
         global_cond_idx = global_cond_idx[-detection_num:]
         global_cond = global_cond[-detection_num:]
 
         # no detections before start, just pad with -1, -1
         # assert len(global_cond_idx) != 0
-            # return torch.tensor([[-1, -1, -1, -1, -1]])
+        # return torch.tensor([[-1, -1, -1, -1, -1]])
         if len(global_cond_idx) == 0:
-            return -1 * torch.ones((1, 213)) # 229 for 5s1h, 213 for 1s1h
+            return -1 * torch.ones((1, 213))  # 229 for 5s1h, 213 for 1s1h
         # convert the indices back to timesteps
-        global_cond_idx_adjusted = (start - global_cond_idx) / self.max_trajectory_length
-        global_cond = np.concatenate((global_cond_idx_adjusted[:, None], global_cond), axis=1)
-
+        global_cond_idx_adjusted = (
+            start - global_cond_idx
+        ) / self.max_trajectory_length
+        global_cond = np.concatenate(
+            (global_cond_idx_adjusted[:, None], global_cond), axis=1
+        )
 
         return torch.tensor(global_cond).float()
 
     def get_conditions(self, idx, start, end, trajectories):
-        '''
-            condition on current observation for planning
-        '''
+        """
+        condition on current observation for planning
+        """
         detected_dic = self.detected_dics[idx]
         # subtract off the start and don't take anything past the end
 
         start_idx_find = np.where(detected_dic[0] >= start)[0]
         end_idx_find = np.where(detected_dic[0] < end)[0]
-        # These are global conditions where the global_cond_idx is the 
+        # These are global conditions where the global_cond_idx is the
         # integer index within the trajectory of where the detection occured
 
         # Take the detections before the start of the trajectory
@@ -552,13 +599,19 @@ class NAgentsSingleDataset(torch.utils.data.Dataset):
             global_cond_idx = np.array([])
             global_cond = np.array([])
         else:
-            global_cond_idx = detected_dic[0][:before_start_detects[-1]+1]
-            global_cond = detected_dic[1][:before_start_detects[-1]+1]
+            global_cond_idx = detected_dic[0][: before_start_detects[-1] + 1]
+            global_cond = detected_dic[1][: before_start_detects[-1] + 1]
 
-        detection_lstm = self.convert_global_for_lstm(global_cond_idx, global_cond, start)
+        detection_lstm = self.convert_global_for_lstm(
+            global_cond_idx, global_cond, start
+        )
 
         if self.condition_path:
-            if len(start_idx_find) == 0 or len(end_idx_find) == 0 or start_idx_find[0] > end_idx_find[-1]:
+            if (
+                len(start_idx_find) == 0
+                or len(end_idx_find) == 0
+                or start_idx_find[0] > end_idx_find[-1]
+            ):
                 # always include the start of the path
                 if self.include_start_detection:
                     idxs = np.array([0])
@@ -570,8 +623,8 @@ class NAgentsSingleDataset(torch.utils.data.Dataset):
                 start_idx = start_idx_find[0]
                 end_idx = end_idx_find[-1]
 
-                idxs = detected_dic[0][start_idx:end_idx+1] - start
-                detects = detected_dic[1][start_idx:end_idx+1]
+                idxs = detected_dic[0][start_idx : end_idx + 1] - start
+                detects = detected_dic[1][start_idx : end_idx + 1]
 
                 if idxs[0] != 0 and self.include_start_detection:
                     idxs = np.concatenate((np.array([0]), idxs))
@@ -589,37 +642,51 @@ class NAgentsSingleDataset(torch.utils.data.Dataset):
         path_ind, start, end = self.indices[idx]
 
         trajectories = self.agent_locs[path_ind][start:end]
-        all_detections, conditions = self.get_conditions(path_ind, start, end, trajectories)
+        all_detections, conditions = self.get_conditions(
+            path_ind, start, end, trajectories
+        )
 
         hideout_loc = self.hideout_locs[path_ind]
         hideout_loc = self.find_target_hideout(hideout_loc, path_ind)
         global_cond = hideout_loc
 
-        prisoner_at_start = np.concatenate((np.array([0]), np.array(trajectories[0,:2])))
+        prisoner_at_start = np.concatenate(
+            (np.array([0]), np.array(trajectories[0, :2]))
+        )
 
-        batch = (trajectories, global_cond, all_detections, conditions, prisoner_at_start)
+        batch = (
+            trajectories,
+            global_cond,
+            all_detections,
+            conditions,
+            prisoner_at_start,
+        )
         return batch
-    
+
     def find_target_hideout(self, hideout_loc, path_ind):
         # INFO: find the hideout the prisoner is reaching
-        red_path_terminal_loc = self.unnormalize(self.agent_locs[path_ind][-1,:2])
+        red_path_terminal_loc = self.unnormalize(self.agent_locs[path_ind][-1, :2])
         hideout_num = len(hideout_loc) // 2
         hideout_reached_id = 0
         hideout_reached_dist = np.inf
         for hideout_id in range(hideout_num):
-            candidate_hideout_loc = self.hideout_locs[path_ind][2*hideout_id:2*hideout_id+2] * 2428
-            candidate_terminal_error = np.linalg.norm(red_path_terminal_loc - candidate_hideout_loc)
+            candidate_hideout_loc = (
+                self.hideout_locs[path_ind][2 * hideout_id : 2 * hideout_id + 2] * 2428
+            )
+            candidate_terminal_error = np.linalg.norm(
+                red_path_terminal_loc - candidate_hideout_loc
+            )
             if candidate_terminal_error < hideout_reached_dist:
                 hideout_reached_dist = candidate_terminal_error
                 hideout_reached_id = hideout_id
             else:
                 pass
-        hideout_loc = hideout_loc[2*hideout_reached_id:2*hideout_reached_id+2]
+        hideout_loc = hideout_loc[2 * hideout_reached_id : 2 * hideout_reached_id + 2]
         return hideout_loc
 
     def collate_fn(self):
         return pad_collate_detections
-    
+
     def collate_fn_repeat(self):
         return pad_collate_detections_repeat
 
@@ -629,7 +696,9 @@ class NAgentsIncrementalDataset(torch.utils.data.Dataset):
         super().__init__()
         self.env = env
         self.set_normalization_factors()
-        self.hideout_locs = (np.array(self.env.hideout_locations).astype(float) / self.env.dim_x)
+        self.hideout_locs = (
+            np.array(self.env.hideout_locations).astype(float) / self.env.dim_x
+        )
         self.episode_t = 0
         self.max_detection_num = 32
         self.agent_locs = []
@@ -660,7 +729,6 @@ class NAgentsIncrementalDataset(torch.utils.data.Dataset):
         if self.episode_t % freq == 0:
             self.gt_blue_states_t.append(self.episode_t)
 
-
     def push_red_obs(self):
         red_obs = self.env.get_fugitive_observation()
         self.red_observations.append(red_obs)
@@ -671,7 +739,7 @@ class NAgentsIncrementalDataset(torch.utils.data.Dataset):
         search_party_locations, helicopter_locations = self.env.get_blue_locations()
         blue_location = helicopter_locations + search_party_locations
         # agent_locs = np.array([prisoner_location]+blue_location)
-        agent_locs = np.array([prisoner_location]+blue_location)
+        agent_locs = np.array([prisoner_location] + blue_location)
         self.agent_locs.append(self.normalize(agent_locs.astype(float)))
 
     def update_detections(self, red_obs):
@@ -679,7 +747,10 @@ class NAgentsIncrementalDataset(torch.utils.data.Dataset):
         wrapped_red_observation = self.env.obs_names(red_obs)
         # INFO: include all detections
         final_camera_idx = self.env.num_known_cameras + self.env.num_unknown_cameras - 1
-        red_detections_of_blue = wrapped_red_observation.get_section_include_terminals(key_start="helicopter_detect_0", key_end="camera_detect_%d"%final_camera_idx)
+        red_detections_of_blue = wrapped_red_observation.get_section_include_terminals(
+            key_start="helicopter_detect_0",
+            key_end="camera_detect_%d" % final_camera_idx,
+        )
         if np.any(red_detections_of_blue[1::4]):
             # need to convert from 0-1 to -1 to 1
             red_detections_of_blue[2::4] = red_detections_of_blue[2::4] * 2 - 1
@@ -690,9 +761,9 @@ class NAgentsIncrementalDataset(torch.utils.data.Dataset):
             pass
 
     def get_conditions(self, trajectories, max_detection_num=32):
-        '''
-            condition on current observation for planning
-        '''
+        """
+        condition on current observation for planning
+        """
 
         if len(self.red_detect_blue) == 0:
             global_cond_idx = np.array([])
@@ -709,7 +780,11 @@ class NAgentsIncrementalDataset(torch.utils.data.Dataset):
         detection_lstm = []
         for i in range(num_agents):
             detects = np.stack([x[i] for x in self.gt_blue_states])
-            for_lstm = self.convert_global_for_lstm(global_cond_idx=np.array(self.gt_blue_states_t), global_cond=detects, start=self.episode_t-1)
+            for_lstm = self.convert_global_for_lstm(
+                global_cond_idx=np.array(self.gt_blue_states_t),
+                global_cond=detects,
+                start=self.episode_t - 1,
+            )
             detection_lstm.append(for_lstm)
         idxs = np.array([[0]])
         detects = np.array([trajectories[0]])
@@ -717,19 +792,23 @@ class NAgentsIncrementalDataset(torch.utils.data.Dataset):
         return detection_lstm, (idxs, detects)
 
     def convert_global_for_lstm(self, global_cond_idx, global_cond, start):
-        """ Convert the indices back to timesteps and concatenate them together"""
+        """Convert the indices back to timesteps and concatenate them together"""
         detection_num = min(self.max_detection_num, len(global_cond_idx))
         global_cond_idx = global_cond_idx[-detection_num:]
         global_cond = global_cond[-detection_num:]
 
         # no detections before start, just pad with -1, -1
         # assert len(global_cond_idx) != 0
-            # return torch.tensor([[-1, -1, -1, -1, -1]])
+        # return torch.tensor([[-1, -1, -1, -1, -1]])
         if len(global_cond_idx) == 0:
-            return -1 * torch.ones((1, 13)) # 229 for 5s1h, 213 for 1s1h, 13 for hs only
+            return -1 * torch.ones(
+                (1, 13)
+            )  # 229 for 5s1h, 213 for 1s1h, 13 for hs only
         # convert the indices back to timesteps
         global_cond_idx_adjusted = (start - global_cond_idx) / self.env.max_timesteps
-        global_cond = np.concatenate((global_cond_idx_adjusted[:, None], global_cond), axis=1)
+        global_cond = np.concatenate(
+            (global_cond_idx_adjusted[:, None], global_cond), axis=1
+        )
         return torch.tensor(global_cond).float()
 
     def __len__(self):
@@ -740,18 +819,26 @@ class NAgentsIncrementalDataset(torch.utils.data.Dataset):
         trajectories = self.agent_locs[-1]
         all_detections, conditions = self.get_conditions(trajectories)
 
-        random_idx = np.random.randint(len(self.hideout_locs)//2)
+        random_idx = np.random.randint(len(self.hideout_locs) // 2)
         hideout_loc = self.hideout_locs
         global_cond = hideout_loc
 
-        prisoner_at_start = np.concatenate((np.array([0]), np.array(trajectories[0,:2])))
+        prisoner_at_start = np.concatenate(
+            (np.array([0]), np.array(trajectories[0, :2]))
+        )
 
-        batch = (trajectories, global_cond, all_detections, conditions, prisoner_at_start)
+        batch = (
+            trajectories,
+            global_cond,
+            all_detections,
+            conditions,
+            prisoner_at_start,
+        )
         return batch
 
     def collate_fn(self):
         return pad_collate_detections
-    
+
     def collate_fn_repeat(self):
         return pad_collate_detections_multiHideout
 
@@ -768,10 +855,10 @@ class NAgentsIncrementalDataset(torch.utils.data.Dataset):
         arr[..., 1] = ((y - self.min_y) / (self.max_y - self.min_y)) * 2 - 1
         return arr
 
+
 class RedBlueIncrementalDataset(NAgentsIncrementalDataset):
     def __init__(self, env):
         super().__init__(env)
-
 
     def push_gt_blue_state(self, freq):
         self.gt_blue_states.append(self.env.construct_gt_blue_state(freq))
@@ -780,17 +867,17 @@ class RedBlueIncrementalDataset(NAgentsIncrementalDataset):
 
     def collate_fn(self):
         return pad_collate_detections_red_blue
-    
+
     def collate_fn_repeat(self):
         return pad_collate_detections_repeat_red_blue
-    
+
     def sel_collate_fn(self):
         return pad_collate_detections_selHideout_red_blue
 
     def get_conditions(self, trajectories, max_detection_num=32):
-        '''
-            condition on current observation for planning
-        '''
+        """
+        condition on current observation for planning
+        """
 
         if len(self.red_detect_blue) == 0:
             global_cond_idx = np.array([])
@@ -803,7 +890,11 @@ class RedBlueIncrementalDataset(NAgentsIncrementalDataset):
         detection_lstm = []
         for i in range(num_agents):
             detects = np.stack([x[i] for x in self.gt_blue_states])
-            for_lstm = self.convert_global_for_lstm(global_cond_idx=np.array(self.gt_blue_states_t), global_cond=detects, start=self.episode_t-1)
+            for_lstm = self.convert_global_for_lstm(
+                global_cond_idx=np.array(self.gt_blue_states_t),
+                global_cond=detects,
+                start=self.episode_t - 1,
+            )
             detection_lstm.append(for_lstm)
 
         # detection_lstm = self.convert_global_for_lstm(global_cond_idx=np.array(self.gt_blue_states_t), global_cond=self.gt_blue_states, start=self.episode_t-1)
@@ -813,19 +904,21 @@ class RedBlueIncrementalDataset(NAgentsIncrementalDataset):
         return detection_lstm, (idxs, detects)
 
     def convert_global_for_lstm(self, global_cond_idx, global_cond, start):
-        """ Convert the indices back to timesteps and concatenate them together"""
+        """Convert the indices back to timesteps and concatenate them together"""
         detection_num = min(self.max_detection_num, len(global_cond_idx))
         global_cond_idx = global_cond_idx[-detection_num:]
         global_cond = global_cond[-detection_num:]
 
         # no detections before start, just pad with -1, -1
         # assert len(global_cond_idx) != 0
-            # return torch.tensor([[-1, -1, -1, -1, -1]])
+        # return torch.tensor([[-1, -1, -1, -1, -1]])
         if len(global_cond_idx) == 0:
-            return -1 * torch.ones((1, 3)) # 229 for 5s1h, 213 for 1s1h, 13 for hs only
+            return -1 * torch.ones((1, 3))  # 229 for 5s1h, 213 for 1s1h, 13 for hs only
         # convert the indices back to timesteps
         global_cond_idx_adjusted = (start - global_cond_idx) / self.env.max_timesteps
-        global_cond = np.concatenate((global_cond_idx_adjusted[:, None], global_cond), axis=1)
+        global_cond = np.concatenate(
+            (global_cond_idx_adjusted[:, None], global_cond), axis=1
+        )
         return torch.tensor(global_cond).float()
 
 
@@ -849,10 +942,13 @@ def pad_collate_detections_red_blue(batch):
     for i, d in enumerate(detects):
         x_lens = [len(x) for x in d]
         xx_pad = pad_sequence(d, batch_first=True, padding_value=0)
-        ds = pack_padded_sequence(xx_pad, x_lens, batch_first=True, enforce_sorted=False).to(torch.float32)
+        ds = pack_padded_sequence(
+            xx_pad, x_lens, batch_first=True, enforce_sorted=False
+        ).to(torch.float32)
         global_dict[f"d{i}"] = ds
 
     return data, global_dict, conditions
+
 
 def pad_collate_detections_repeat_red_blue(batch, num_samples):
     (data, global_cond, all_detections, conditions, prisoner_at_start) = zip(*batch)
@@ -872,17 +968,20 @@ def pad_collate_detections_repeat_red_blue(batch, num_samples):
 
     prisoner_at_start = torch.tensor(np.stack(prisoner_at_start, axis=0))
 
-    red_start = (prisoner_at_start).repeat((num_samples,1))
+    red_start = (prisoner_at_start).repeat((num_samples, 1))
 
     global_dict = {"hideouts": global_cond, "red_start": red_start}
     for i, d in enumerate(detects):
         d_mult = d * num_samples
         x_lens = [len(x) for x in d_mult]
         xx_pad = pad_sequence(d_mult, batch_first=True, padding_value=0)
-        ds = pack_padded_sequence(xx_pad, x_lens, batch_first=True, enforce_sorted=False).to(torch.float32)
+        ds = pack_padded_sequence(
+            xx_pad, x_lens, batch_first=True, enforce_sorted=False
+        ).to(torch.float32)
         global_dict[f"d{i}"] = ds
 
     return data, global_dict, conditions
+
 
 def pad_collate_detections_selHideout_red_blue(batch, num_samples_each_hideout):
     (data, global_cond, all_detections, conditions, prisoner_at_start) = zip(*batch)
@@ -893,12 +992,23 @@ def pad_collate_detections_selHideout_red_blue(batch, num_samples_each_hideout):
     global_cond = torch.tensor(global_cond[0])
     hideout_num = global_cond.shape[0]
     samples_num = num_samples_each_hideout * hideout_num
-    global_cond = torch.cat([global_cond[i].repeat(num_samples_each_hideout, 1) for i in range(hideout_num)], dim=0)
-    
+    global_cond = torch.cat(
+        [
+            global_cond[i].repeat(num_samples_each_hideout, 1)
+            for i in range(hideout_num)
+        ],
+        dim=0,
+    )
 
     # all_detections = list(all_detections) * samples_num
     conditions = list(conditions) * samples_num
-    conditions = [[np.concatenate((conditions[i][0], np.array([[-1]]))), np.concatenate((conditions[i][1], global_cond[i:i+1]*2-1))] for i in range(samples_num)]
+    conditions = [
+        [
+            np.concatenate((conditions[i][0], np.array([[-1]]))),
+            np.concatenate((conditions[i][1], global_cond[i : i + 1] * 2 - 1)),
+        ]
+        for i in range(samples_num)
+    ]
 
     x_lens = [len(x) for x in all_detections]
     # xx_pad = pad_sequence(all_detections, batch_first=True, padding_value=0)
@@ -917,18 +1027,20 @@ def pad_collate_detections_selHideout_red_blue(batch, num_samples_each_hideout):
 
     prisoner_at_start = torch.tensor(np.stack(prisoner_at_start, axis=0))
 
-    # global_dict = {"hideouts": global_cond.to(global_device_name), 
+    # global_dict = {"hideouts": global_cond.to(global_device_name),
     #     # "red_start": torch.Tensor(prisoner_at_start).to(global_device_name).repeat_interleave(repeats=samples_num, dim=0)
     #     "red_start": prisoner_at_start.to(global_device_name).repeat((samples_num, 1))
     #     }
 
-    red_start = prisoner_at_start.repeat((samples_num,1))
+    red_start = prisoner_at_start.repeat((samples_num, 1))
     global_dict = {"hideouts": global_cond, "red_start": red_start}
     for i, d in enumerate(detects):
         d_mult = d * samples_num
         x_lens = [len(x) for x in d_mult]
         xx_pad = pad_sequence(d_mult, batch_first=True, padding_value=0)
-        ds = pack_padded_sequence(xx_pad, x_lens, batch_first=True, enforce_sorted=False).to(torch.float32)
+        ds = pack_padded_sequence(
+            xx_pad, x_lens, batch_first=True, enforce_sorted=False
+        ).to(torch.float32)
         global_dict[f"d{i}"] = ds
 
     return data, global_dict, conditions
@@ -941,24 +1053,33 @@ class RedIncrementalDataset(NAgentsIncrementalDataset):
     def push_locations(self):
         prisoner_location = self.env.get_prisoner_location()
         agent_locs = np.array([prisoner_location])
-        self.agent_locs.append(self.normalize(agent_locs.astype(float)))        
+        self.agent_locs.append(self.normalize(agent_locs.astype(float)))
 
     def __getitem__(self, idx):
         # path_ind, start, end = self.indices[idx]
         trajectories = self.agent_locs[-1]
         all_detections, conditions = self.get_conditions(trajectories)
 
-        random_idx = np.random.randint(len(self.hideout_locs)//2)
+        random_idx = np.random.randint(len(self.hideout_locs) // 2)
         hideout_loc = self.hideout_locs
         global_cond = hideout_loc
 
-        prisoner_at_start = np.concatenate((np.array([0]), np.array(trajectories[0,:2])))
+        prisoner_at_start = np.concatenate(
+            (np.array([0]), np.array(trajectories[0, :2]))
+        )
 
-        batch = (trajectories, global_cond, all_detections, conditions, prisoner_at_start)
+        batch = (
+            trajectories,
+            global_cond,
+            all_detections,
+            conditions,
+            prisoner_at_start,
+        )
         return batch
 
     def sel_collate_fn(self):
         return pad_collate_detections_selHideout
+
 
 def pad_collate_detections(batch):
     (data, global_cond, all_detections, conditions, prisoner_at_start) = zip(*batch)
@@ -968,12 +1089,19 @@ def pad_collate_detections(batch):
 
     x_lens = [len(x) for x in all_detections]
     xx_pad = pad_sequence(all_detections, batch_first=True, padding_value=0)
-    detections = pack_padded_sequence(xx_pad, x_lens, batch_first=True, enforce_sorted=False).to(torch.float32)
+    detections = pack_padded_sequence(
+        xx_pad, x_lens, batch_first=True, enforce_sorted=False
+    ).to(torch.float32)
 
     # Pass this to condition our models rather than pass them separately
-    global_dict = {"hideouts": global_cond.to(global_device_name), "detections": detections.to(global_device_name), "red_start": torch.Tensor(prisoner_at_start).to(global_device_name)}
+    global_dict = {
+        "hideouts": global_cond.to(global_device_name),
+        "detections": detections.to(global_device_name),
+        "red_start": torch.Tensor(prisoner_at_start).to(global_device_name),
+    }
 
     return data, global_dict, conditions
+
 
 def pad_collate_detections_multiHideout(batch, num_samples):
     (data, global_cond, all_detections, conditions, prisoner_at_start) = zip(*batch)
@@ -983,23 +1111,36 @@ def pad_collate_detections_multiHideout(batch, num_samples):
 
     data = data.repeat((num_samples, 1, 1))
 
-    hideout_ind_sel = torch.randint(low=0, high=global_cond.shape[0], size=(num_samples,))
-    global_cond = global_cond[hideout_ind_sel,:]
+    hideout_ind_sel = torch.randint(
+        low=0, high=global_cond.shape[0], size=(num_samples,)
+    )
+    global_cond = global_cond[hideout_ind_sel, :]
     all_detections = list(all_detections) * num_samples
     conditions = list(conditions) * num_samples
-    conditions = [[np.concatenate((conditions[i][0], np.array([[-1]]))), np.concatenate((conditions[i][1], global_cond[i:i+1]*2-1))] for i in range(num_samples)]
+    conditions = [
+        [
+            np.concatenate((conditions[i][0], np.array([[-1]]))),
+            np.concatenate((conditions[i][1], global_cond[i : i + 1] * 2 - 1)),
+        ]
+        for i in range(num_samples)
+    ]
 
     # x_lens = [len(x) for x in all_detections]
     # xx_pad = pad_sequence(all_detections, batch_first=True, padding_value=0)
     # detections = pack_padded_sequence(xx_pad, x_lens, batch_first=True, enforce_sorted=False).to(torch.float32)
 
     # Pass this to condition our models rather than pass them separately
-    global_dict = {"hideouts": global_cond.to(global_device_name), 
-        # "unpacked": torch.cat(all_detections, axis=0).to(global_device_name), 
-            "red_start": torch.Tensor(prisoner_at_start).to(global_device_name).repeat_interleave(repeats=num_samples, dim=0)}
+    global_dict = {
+        "hideouts": global_cond.to(global_device_name),
+        # "unpacked": torch.cat(all_detections, axis=0).to(global_device_name),
+        "red_start": torch.Tensor(prisoner_at_start)
+        .to(global_device_name)
+        .repeat_interleave(repeats=num_samples, dim=0),
+    }
     # global_dict = {"hideouts": global_cond, "detections": detections}
 
     return data, global_dict, conditions
+
 
 def pad_collate_detections_selHideout(batch, num_samples_each_hideout):
     (data, global_cond, all_detections, conditions, prisoner_at_start) = zip(*batch)
@@ -1010,12 +1151,23 @@ def pad_collate_detections_selHideout(batch, num_samples_each_hideout):
     global_cond = torch.tensor(global_cond[0])
     hideout_num = global_cond.shape[0]
     samples_num = num_samples_each_hideout * hideout_num
-    global_cond = torch.cat([global_cond[i].repeat(num_samples_each_hideout, 1) for i in range(hideout_num)], dim=0)
-    
+    global_cond = torch.cat(
+        [
+            global_cond[i].repeat(num_samples_each_hideout, 1)
+            for i in range(hideout_num)
+        ],
+        dim=0,
+    )
 
     all_detections = list(all_detections) * samples_num
     conditions = list(conditions) * samples_num
-    conditions = [[np.concatenate((conditions[i][0], np.array([[-1]]))), np.concatenate((conditions[i][1], global_cond[i:i+1]*2-1))] for i in range(samples_num)]
+    conditions = [
+        [
+            np.concatenate((conditions[i][0], np.array([[-1]]))),
+            np.concatenate((conditions[i][1], global_cond[i : i + 1] * 2 - 1)),
+        ]
+        for i in range(samples_num)
+    ]
 
     # x_lens = [len(x) for x in all_detections]
     # xx_pad = pad_sequence(all_detections, batch_first=True, padding_value=0)
@@ -1028,12 +1180,14 @@ def pad_collate_detections_selHideout(batch, num_samples_each_hideout):
 
     prisoner_at_start = torch.tensor(np.stack(prisoner_at_start, axis=0))
 
-    global_dict = {"hideouts": global_cond.to(global_device_name), 
+    global_dict = {
+        "hideouts": global_cond.to(global_device_name),
         # "red_start": torch.Tensor(prisoner_at_start).to(global_device_name).repeat_interleave(repeats=samples_num, dim=0)
-        "red_start": prisoner_at_start.to(global_device_name).repeat((samples_num, 1))
-        }
+        "red_start": prisoner_at_start.to(global_device_name).repeat((samples_num, 1)),
+    }
 
     return data, global_dict, conditions
+
 
 def pad_collate_detections_repeat(batch, num_samples):
     (data, global_cond, all_detections, conditions, prisoner_at_start) = zip(*batch)
@@ -1048,38 +1202,46 @@ def pad_collate_detections_repeat(batch, num_samples):
 
     x_lens = [len(x) for x in all_detections]
     xx_pad = pad_sequence(all_detections, batch_first=True, padding_value=0)
-    detections = pack_padded_sequence(xx_pad, x_lens, batch_first=True, enforce_sorted=False).to(torch.float32)
+    detections = pack_padded_sequence(
+        xx_pad, x_lens, batch_first=True, enforce_sorted=False
+    ).to(torch.float32)
 
     # Pass this to condition our models rather than pass them separately
     # INFO: This is for red+blue trajs
     # global_dict = {"hideouts": global_cond, "detections": detections, "unpacked": torch.cat(all_detections, axis=0), "red_start": torch.Tensor(prisoner_at_start).repeat_interleave(repeats=num_samples, dim=0)}
     # INFO: This is for red traj only
-    global_dict = {"hideouts": global_cond.to(global_device_name), 
-        "red_start": torch.Tensor(prisoner_at_start).to(global_device_name).repeat_interleave(repeats=num_samples, dim=0)}
+    global_dict = {
+        "hideouts": global_cond.to(global_device_name),
+        "red_start": torch.Tensor(prisoner_at_start)
+        .to(global_device_name)
+        .repeat_interleave(repeats=num_samples, dim=0),
+    }
 
     return data, global_dict, conditions
 
+
 def get_lowest_root_folders(root_folder):
     lowest_folders = []
-    
+
     # Get all items in the root folder
     items = os.listdir(root_folder)
-    
+
     # Check if each item is a directory
     for item in items:
         item_path = os.path.join(root_folder, item)
-        
+
         if os.path.isdir(item_path):
             # Recursively call the function for subfolders
             subfolders = get_lowest_root_folders(item_path)
-            
+
             if not subfolders:
                 # If there are no subfolders, add the current folder to the lowest_folders list
-                lowest_folders.append(item_path)         
+                lowest_folders.append(item_path)
             lowest_folders.extend(subfolders)
     if len(lowest_folders) == 0:
         return [root_folder]
     return lowest_folders
+
 
 class NAgentsRewardDataset(torch.utils.data.Dataset):
     def __init__(self, traj_max_num=10192) -> None:
@@ -1111,17 +1273,19 @@ class NAgentsRewardDataset(torch.utils.data.Dataset):
         y = arr[..., 1]
         arr[..., 1] = ((y - self.min_y) / (self.max_y - self.min_y)) * 2 - 1
         return arr
-    
+
     def push(self, prisoner_loc, blue_locs, red_rew, done, red_hideout):
         normalized_prisonerLoc = self.normalize([prisoner_loc])
         normalized_blueLocs = self.normalize(blue_locs)
-        agent_locs = np.concatenate((normalized_prisonerLoc, normalized_blueLocs), axis=0).reshape(-1)
+        agent_locs = np.concatenate(
+            (normalized_prisonerLoc, normalized_blueLocs), axis=0
+        ).reshape(-1)
         if self.traj_num >= self.traj_max_num:
             # INFO: pop out the first traj
-            del self.agent_locations[:self.traj_lens[0]]
-            del self.red_rewards[:self.traj_lens[0]]
-            del self.dones[:self.traj_lens[0]]
-            del self.hideout_loc[:self.traj_lens[0]]
+            del self.agent_locations[: self.traj_lens[0]]
+            del self.red_rewards[: self.traj_lens[0]]
+            del self.dones[: self.traj_lens[0]]
+            del self.hideout_loc[: self.traj_lens[0]]
             self.traj_lens.pop(0)
             self.traj_num = self.traj_num - 1
         if self.traj_num < self.traj_max_num:
@@ -1148,16 +1312,28 @@ class NAgentsRewardDataset(torch.utils.data.Dataset):
             traj_end_localized_step = np.where(self.dones[start_idx:end_idx])[0]
             # traj_start_localized_step = np.where(self.dones[start_idx-self.max_steps:start_idx])[-1]
             if len(traj_end_localized_step) != 0:
-                step_loc = np.stack(curr_batch_loc[0:traj_end_localized_step[0]+1], axis=0)
-                step_rew = np.stack(curr_batch_rew[0:traj_end_localized_step[0]+1], axis=0)
+                step_loc = np.stack(
+                    curr_batch_loc[0 : traj_end_localized_step[0] + 1], axis=0
+                )
+                step_rew = np.stack(
+                    curr_batch_rew[0 : traj_end_localized_step[0] + 1], axis=0
+                )
                 hideout = curr_hideout_loc[traj_end_localized_step[0]]
-                step_loc = np.pad(step_loc, ((0, self.seq_len-(traj_end_localized_step[0]+1)), (0, 0)), 'edge')
-                step_rew = np.pad(step_rew, ((0, self.seq_len-(traj_end_localized_step[0]+1)), (0, 0)), 'constant')
+                step_loc = np.pad(
+                    step_loc,
+                    ((0, self.seq_len - (traj_end_localized_step[0] + 1)), (0, 0)),
+                    "edge",
+                )
+                step_rew = np.pad(
+                    step_rew,
+                    ((0, self.seq_len - (traj_end_localized_step[0] + 1)), (0, 0)),
+                    "constant",
+                )
             else:
                 step_loc = np.stack(curr_batch_loc, axis=0)
                 step_rew = np.stack(curr_batch_rew, axis=0)
                 hideout = curr_hideout_loc[-1]
-            # # INFO: 
+            # # INFO:
             # for i in range(self.max_steps):
             #     if self.dones[start_idx-i] and i != 0:
             #         break
@@ -1166,17 +1342,19 @@ class NAgentsRewardDataset(torch.utils.data.Dataset):
                 step_loc = np.stack(curr_batch_loc, axis=0)
                 step_rew = np.stack(curr_batch_rew, axis=0)
                 hideout = curr_hideout_loc[-1]
-                step_loc = np.pad(step_loc, ((0, end_idx-len(self)), (0, 0)), 'edge')
-                step_rew = np.pad(step_rew, ((0, end_idx-len(self)), (0, 0)), 'constant')
+                step_loc = np.pad(step_loc, ((0, end_idx - len(self)), (0, 0)), "edge")
+                step_rew = np.pad(
+                    step_rew, ((0, end_idx - len(self)), (0, 0)), "constant"
+                )
             else:
                 step_loc = np.stack([self.agent_locations[-1]], axis=0)
                 step_rew = np.stack([self.red_rewards[-1]], axis=0)
                 hideout = self.hideout_loc[-1]
-                step_loc = np.pad(step_loc, ((0, self.seq_len-1), (0, 0)), 'edge')
-                step_rew = np.pad(step_rew, ((0, self.seq_len-1), (0, 0)), 'constant')
+                step_loc = np.pad(step_loc, ((0, self.seq_len - 1), (0, 0)), "edge")
+                step_rew = np.pad(step_rew, ((0, self.seq_len - 1), (0, 0)), "constant")
 
         condition = (np.array([]), np.array([]))
-        prisoner_at_start = np.concatenate((np.array([0]), np.array(step_loc[0,:2])))
+        prisoner_at_start = np.concatenate((np.array([0]), np.array(step_loc[0, :2])))
         return step_loc, step_rew, hideout, condition, torch.Tensor(prisoner_at_start)
 
     def collate_loc_reward(self):
@@ -1185,27 +1363,42 @@ class NAgentsRewardDataset(torch.utils.data.Dataset):
     def collate_loc(self):
         return pad_loc
 
+
 def pad_loc_reward(batch, gamma, period):
     step_loc, step_rew, _, _, _ = zip(*batch)
 
-    batches_seqLen_agentLocations = torch.Tensor(np.stack(step_loc, axis=0)).to(global_device_name)
+    batches_seqLen_agentLocations = torch.Tensor(np.stack(step_loc, axis=0)).to(
+        global_device_name
+    )
     red_rews = torch.Tensor(np.stack(step_rew, axis=0)).squeeze()
     seq_len = batches_seqLen_agentLocations.shape[1]
     discount_factors = torch.Tensor([gamma**i for i in range(seq_len)])
-    batches_seqLen_redRews = torch.sum(red_rews*discount_factors, axis=-1, keepdim=True).to(global_device_name)
+    batches_seqLen_redRews = torch.sum(
+        red_rews * discount_factors, axis=-1, keepdim=True
+    ).to(global_device_name)
 
-    return batches_seqLen_agentLocations[:,::period,:2], batches_seqLen_redRews
+    return batches_seqLen_agentLocations[:, ::period, :2], batches_seqLen_redRews
+
 
 def pad_loc(batch):
     step_loc, step_rew, hideout, condition, prisoner_at_start = zip(*batch)
-    batches_seqLen_agentLocations = torch.Tensor(np.stack(step_loc, axis=0)).to(global_device_name)
+    batches_seqLen_agentLocations = torch.Tensor(np.stack(step_loc, axis=0)).to(
+        global_device_name
+    )
     hideout = torch.stack(hideout, dim=0).to(global_device_name)
     prisoner_at_start = torch.stack(prisoner_at_start, dim=0).to(global_device_name)
     # INFO: construct the global condition
     global_dict = {"hideouts": hideout, "red_start": prisoner_at_start}
-    return batches_seqLen_agentLocations[:,:,:2], global_dict, condition
+    return batches_seqLen_agentLocations[:, :, :2], global_dict, condition
 
-def update_raw_traj(raw_red_downsampled_traj, detected_blue_states, red_vel, perception_max_thresh=0.1, perception_min_thresh=0.05):
+
+def update_raw_traj(
+    raw_red_downsampled_traj,
+    detected_blue_states,
+    red_vel,
+    perception_max_thresh=0.1,
+    perception_min_thresh=0.05,
+):
     raw_red_downsampled_traj = copy.deepcopy(raw_red_downsampled_traj)
     repulse_vec = torch.zeros_like(raw_red_downsampled_traj).to(global_device_name)
     for detects in detected_blue_states:
@@ -1214,19 +1407,35 @@ def update_raw_traj(raw_red_downsampled_traj, detected_blue_states, red_vel, per
 
         blue_to_pt = raw_red_downsampled_traj - detect_loc
         dist_from_blue_to_pt = torch.norm(blue_to_pt, dim=-1, keepdim=True)
-        dist_from_blue_to_pt[dist_from_blue_to_pt>perception_max_thresh] = 1e6
-        dist_from_blue_to_pt[dist_from_blue_to_pt<perception_min_thresh] = 0.05
+        dist_from_blue_to_pt[dist_from_blue_to_pt > perception_max_thresh] = 1e6
+        dist_from_blue_to_pt[dist_from_blue_to_pt < perception_min_thresh] = 0.05
 
         # INFO: vertical to relative vel
         relative_vel = detect_vel - red_vel
         if relative_vel[0] == 0 and relative_vel[1] == 0:
             repulse_direction_vec = blue_to_pt
-            repulse_direction_vec_normalized = repulse_direction_vec / torch.norm(repulse_direction_vec, dim=-1, keepdim=True)
-            repulse_vec = repulse_vec + 0.001 * repulse_direction_vec_normalized / dist_from_blue_to_pt
+            repulse_direction_vec_normalized = repulse_direction_vec / torch.norm(
+                repulse_direction_vec, dim=-1, keepdim=True
+            )
+            repulse_vec = (
+                repulse_vec
+                + 0.001 * repulse_direction_vec_normalized / dist_from_blue_to_pt
+            )
         else:
-            repulse_direction_vec = blue_to_pt - torch.inner(blue_to_pt, relative_vel).unsqueeze(-1) / torch.norm(relative_vel) @ (relative_vel / torch.norm(relative_vel)).unsqueeze(0)
-            repulse_direction_vec_normalized = repulse_direction_vec / torch.norm(repulse_direction_vec, dim=-1, keepdim=True)
-            repulse_vec = repulse_vec + 0.001 * repulse_direction_vec_normalized / dist_from_blue_to_pt        
+            repulse_direction_vec = blue_to_pt - torch.inner(
+                blue_to_pt, relative_vel
+            ).unsqueeze(-1) / torch.norm(relative_vel) @ (
+                relative_vel / torch.norm(relative_vel)
+            ).unsqueeze(
+                0
+            )
+            repulse_direction_vec_normalized = repulse_direction_vec / torch.norm(
+                repulse_direction_vec, dim=-1, keepdim=True
+            )
+            repulse_vec = (
+                repulse_vec
+                + 0.001 * repulse_direction_vec_normalized / dist_from_blue_to_pt
+            )
 
         # INFO: vertical to abs vel
         # if detect_vel[0] == 0 and detect_vel[1] == 0:
@@ -1250,19 +1459,29 @@ if __name__ == "__main__":
     data_path = "/home/wu/Research/Diffuser/data/prisoner_datasets/october_datasets/gnn_map_0_run_600_AStar_only_dr"
 
     # data_path = "/home/sean/PrisonerEscape/datasets/multiagent/AStar"
-    dataset = NAgentsSingleDataset(data_path,                  
-                 horizon = 60,
-                 normalizer = None,
-                 global_lstm_include_start=False,
-                 condition_path = False)
-    
+    dataset = NAgentsSingleDataset(
+        data_path,
+        horizon=60,
+        normalizer=None,
+        global_lstm_include_start=False,
+        condition_path=False,
+    )
+
     # print(dataset[0])
 
     def cycle(dl):
-        while True:generate_path_samples
+        while True:
+            generate_path_samples
+
     train_batch_size = 32
     dataloader = torch.utils.data.DataLoader(
-        dataset, batch_size=train_batch_size, num_workers=1, shuffle=True, pin_memory=True, collate_fn=dataset.collate_fn())
+        dataset,
+        batch_size=train_batch_size,
+        num_workers=1,
+        shuffle=True,
+        pin_memory=True,
+        collate_fn=dataset.collate_fn(),
+    )
 
     for i in dataloader:
         pass
