@@ -39,6 +39,17 @@ from simulator.forest_coverage.autoencoder import produce_terrain_embedding
 
 from blue_bc.utils import sort_filtering_output, get_localized_trgt_gaussian_locations, localize_filtering_mu
 
+
+def _to_np_cpu(x):
+    import numpy as _np
+    try:
+        import torch as _torch
+        if isinstance(x, _torch.Tensor):
+            return x.detach().cpu().numpy()
+    except Exception:
+        pass
+    return _np.asarray(x)
+
 class ObservationType(Enum):
     Fugitive = auto()
     FugitiveGoal = auto()
@@ -1352,7 +1363,9 @@ class PrisonerBothEnv(gym.Env):
         reward = self.reward_scheme.time
         # INFO: Prisoner receives a large reward when it reaches any waypoint
         if not self.reach_waypoint:
-            reward = reward - 2.5 * self.dist_coeff * np.linalg.norm(np.asarray(self.waypoints[self.waypt_idx]) - np.asarray(self.prisoner.location)) / self.dim_x
+            wp = _to_np_cpu(self.waypoints[self.waypt_idx]).astype(np.float32)
+            ploc = np.asarray(self.prisoner.location, dtype=np.float32)
+            reward = reward - 2.5 * self.dist_coeff * np.linalg.norm(wp - ploc) / self.dim_x
         else:
             reward = reward + 13 
             # self.waypt_idx = self.waypt_idx + 1
@@ -1612,7 +1625,9 @@ class PrisonerBothEnv(gym.Env):
 
     def near_waypoint(self):
         """If the prisoner is within range of nextwaypoint, return true. Otherwise, return false."""
-        if ((np.asarray(self.waypoints[self.waypt_idx]) - np.asarray(self.prisoner.location)) ** 2).sum() ** .5 <= 10:
+        wp = _to_np_cpu(self.waypoints[self.waypt_idx]).astype(np.float32)
+        ploc = np.asarray(self.prisoner.location, dtype=np.float32)
+        if np.linalg.norm(wp - ploc) <= 10:
             return True
         else:
             return False
@@ -1833,8 +1848,11 @@ class PrisonerBothEnv(gym.Env):
         # observation.extend(fugitive_detection_of_parties)
         # observation.extend(self.predicted_relative_blue_locations_from_last_two_detections)
         observation.extend(np.concatenate(self.get_relative_hs_locVels())/self.dim_x)
-        if self.waypoints is not None:
-            observation.extend((np.array(self.waypoints[self.waypt_idx]) - np.array(self.prisoner.location)) / self.dim_x)
+        
+        wp = _to_np_cpu(self.waypoints[self.waypt_idx]).astype(np.float32)
+        ploc = np.asarray(self.prisoner.location, dtype=np.float32)
+        observation.extend(((wp - ploc) / self.dim_x).tolist())
+
         observation = np.array(observation)
         observation = np.concatenate((observation, np.array([terrain.detection_coefficient_given_location(self.prisoner.location)])))
         return observation # shape = (120,), 120 = 1(timestep) + 44(known camera num) * 2 + 3(hideout num) * 3(known_to_good_guys+hideout loc) + 2(prisoner location) + 2(prisoner action) + 18(fugitive_detection_of_parties) + 0(terrain)

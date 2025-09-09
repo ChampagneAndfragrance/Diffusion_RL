@@ -11,14 +11,37 @@ import copy
 import random
 import skimage.measure
 from fugitive_policies.custom_queue import QueueFIFO
+
 # from fugitive_policies.rrt_star_adversarial_heuristic import RRTStarAdversarial, Plotter
 from fugitive_policies.a_star_policy import AStarPolicy
 from fugitive_policies.a_star.gridmap import OccupancyGridMap
 from fugitive_policies.a_star.a_star import a_star
-from fugitive_policies.a_star.utils import plot_path, plot_multiple_paths, plot_both_paths
+from fugitive_policies.a_star.utils import (
+    plot_path,
+    plot_multiple_paths,
+    plot_both_paths,
+)
 
-global_device_name = "cuda"
-global_device = torch.device("cuda")
+def to_cpu_numpy(x):
+    import numpy as _np, torch as _torch
+    if _torch.is_tensor(x):
+        return x.detach().cpu().numpy()
+    return _np.asarray(x)
+
+
+def _select_device():
+    try:
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return "mps"
+    except Exception:
+        pass
+    if torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
+
+global_device_name = _select_device()
+global_device = torch.device(global_device_name)
+print(f"[Device] Using {global_device_name} (MPS: {getattr(torch.backends, 'mps', None) and torch.backends.mps.is_available()}, CUDA: {torch.cuda.is_available()})")
 
 def cycle(dl):
     while True:
@@ -27,6 +50,7 @@ def cycle(dl):
         else:
             for data in dl:
                 yield data
+
 
 # def smoothness_loss(traj):
 #     smoothness_out = (traj[:, :-1, :] - traj[:, 1:, :])**2
@@ -44,7 +68,7 @@ def cycle(dl):
 #     return c_loss
 
 # def mountain_loss(traj):
-#     m_center = np.array([[1800, 1600]])/ 2428. 
+#     m_center = np.array([[1800, 1600]])/ 2428.
 #     m_center = m_center * 2 - 1
 #     m_center = torch.tensor(m_center, dtype=traj.dtype).to(traj.device)
 
@@ -82,12 +106,14 @@ def cycle(dl):
 #     betas_clipped = np.clip(betas, a_min=0, a_max=0.999)
 #     return torch.tensor(betas_clipped, dtype=dtype)
 
+
 def to_np(x):
     if torch.is_tensor(x):
         x = x.detach().cpu().numpy()
     if isinstance(x, list):
         x = np.array(x)
     return x
+
 
 # class DiffusionModel(torch.nn.Module):
 #     def __init__(self, env, diffusion_path, ema_path, n_timesteps, clip_denoised=True, predict_epsilon=False) -> None:
@@ -195,7 +221,7 @@ def to_np(x):
 
 #         # apply the new conditioning to the trajectory
 #         # this essentially masks our x
-#         x = apply_conditioning(x, cond_noised, self.action_dim) 
+#         x = apply_conditioning(x, cond_noised, self.action_dim)
 
 #         # Now we denoise it again
 #         b, *_, device = *x.shape, x.device
@@ -209,7 +235,7 @@ def to_np(x):
 #         b, *_, device = *x.shape, x.device
 #         noise= torch.randn_like(x)
 #         # no noise when t == 0
-#         nonzero_mask = (1 - (t == 0).float()).reshape(b, *((1,) * (len(x.shape) - 1))) 
+#         nonzero_mask = (1 - (t == 0).float()).reshape(b, *((1,) * (len(x.shape) - 1)))
 #         model_mean, _, model_log_variance = self.p_mean_variance(x=x, cond=cond, t=t, global_cond=global_cond)
 
 #         model_mean = model_mean.clone().detach()
@@ -230,16 +256,16 @@ def to_np(x):
 
 #         # try alternating between sampling from the model and sampling from the constraint
 #         # if i % 2 != 0:
-#         return model_mean + nonzero_mask * (0.5 * model_log_variance).exp() * noise    
+#         return model_mean + nonzero_mask * (0.5 * model_log_variance).exp() * noise
 
 
 #     @torch.no_grad()
 #     def move_towards_constraint(self, x, global_cond, cond, t, constraint_scale=15):
 #         b, *_, device = *x.shape, x.device
 #         noise= torch.randn_like(x)
-#         nonzero_mask = (1 - (t == 0).float()).reshape(b, *((1,) * (len(x.shape) - 1))) 
+#         nonzero_mask = (1 - (t == 0).float()).reshape(b, *((1,) * (len(x.shape) - 1)))
 #         model_mean, _, model_log_variance = self.p_mean_variance(x=x, cond=cond, t=t, global_cond=global_cond)
-#         adjust_mean = self.compute_constraint_gradient(x, cond) 
+#         adjust_mean = self.compute_constraint_gradient(x, cond)
 #         # adjust_mean = adjust_mean * constraint_scale * (nonzero_mask * (0.5 * model_log_variance).exp())
 #         adjust_mean = adjust_mean * constraint_scale
 #         # return x + adjust_mean + nonzero_mask * (0.5 * model_log_variance).exp() * noise
@@ -271,7 +297,7 @@ def to_np(x):
 #             return x, torch.stack(diffusion, dim=1)
 #         else:
 #             return x
-        
+
 #     # @torch.no_grad()
 #     def p_sample_loop_constrained(self, shape, global_cond, cond, verbose=True, return_diffusion=False):
 #         device = self.betas.device
@@ -328,7 +354,7 @@ def to_np(x):
 
 #         image_after_step = torch.randn(shape, device=device)
 
-#         for t_last, t_cur in time_pairs: 
+#         for t_last, t_cur in time_pairs:
 #             if t_cur < t_last:
 #                 # x = reverse_diffusion x_known
 #                 timesteps = torch.full((batch_size,), t_last, device=device, dtype=torch.long)
@@ -343,14 +369,14 @@ def to_np(x):
 #                 image_after_step = self.undo(image_after_step, t=t_last + t_shift, debug=False)
 
 #     def undo(self, img_after_model, t, debug=False):
-#         return self._undo(img_after_model, t)    
+#         return self._undo(img_after_model, t)
 
 #     def _undo(self, x, t, device="cuda"):
 #         # need to make this correct
 #         # beta = _extract_into_tensor(self.betas, t, x.shape)
 #         # x_noisy = torch.sqrt(1-beta) * x + torch.sqrt(beta) * torch.randn_like(x)
 #         # return x_noisy
-    
+
 #         # self.register_buffer('sqrt_betas', torch.sqrt(betas))
 #         sqrt_betas = torch.sqrt(self.betas)
 #         sqrt_one_minus_betas = torch.sqrt(1 - self.betas)
@@ -373,7 +399,7 @@ def to_np(x):
 
 #     def compute_constraint_gradient(self, traj, cond):
 #         """ Compute the gradient to make the constraint satisfied.
-#          Currently not used on REPAINT branch !!! 
+#          Currently not used on REPAINT branch !!!
 #         One issue is how to ignore the gradient in areas of -1?
 #         """
 #         assert cond is not None
@@ -381,7 +407,7 @@ def to_np(x):
 #             traj = traj.detach().requires_grad_(True)
 #             out = self.compute_smoothness(traj)
 #             ret_val = torch.autograd.grad(out, traj)[0]
-        
+
 #         # for all the indices in cond, set the gradient to 0
 #         for b, c in enumerate(cond):start_loc
 #         return ret_val
@@ -400,8 +426,11 @@ def to_np(x):
 
 #         return self.p_sample_loop(shape, global_cond, cond, *args, **kwargs)
 
+
 class DiffusionGlobalPlanner(object):
-    def __init__(self, env, diffusion, ema, max_speed, plot, plot_traj_num=None) -> None:
+    def __init__(
+        self, env, diffusion, ema, max_speed, plot, plot_traj_num=None
+    ) -> None:
         self.model = diffusion
         self.ema_model = ema
         self.env = env
@@ -425,42 +454,74 @@ class DiffusionGlobalPlanner(object):
         return desired_action
 
     def generate_path_samples(self, n_samples=10, plot=True):
-        '''
-            generate samples from (ema) diffusion model
-        '''
+        """
+        generate samples from (ema) diffusion model
+        """
         if len(self.actions) == 0:
-            start_loc = torch.cat((torch.Tensor([0]), self.normalize(torch.Tensor(self.env.get_prisoner_location())))).unsqueeze(0).repeat(n_samples, 1)
+            start_loc = (
+                torch.cat(
+                    (
+                        torch.Tensor([0]),
+                        self.normalize(torch.Tensor(self.env.get_prisoner_location())),
+                    )
+                )
+                .unsqueeze(0)
+                .repeat(n_samples, 1)
+            )
             # start_loc = torch.cat((torch.Tensor([0]), torch.Tensor(self.env.get_prisoner_location()) / self.env.dim_x)).unsqueeze(0).repeat(n_samples, 1)
-            hideout_locs = torch.Tensor(np.concatenate(self.env.hideout_locations) / self.env.dim_x).unsqueeze(0).repeat(n_samples, 1)
+            hideout_locs = (
+                torch.Tensor(
+                    np.concatenate(self.env.hideout_locations) / self.env.dim_x
+                )
+                .unsqueeze(0)
+                .repeat(n_samples, 1)
+            )
             # repeated_detects = batch[1]['detections'].data.repeat(n_samples, 1)
-            global_cond = {'detections': start_loc, 'hideouts': hideout_locs}
+            global_cond = {"detections": start_loc, "hideouts": hideout_locs}
             # conditions = self.construct_conditions(start_loc[0:1,1:], hideout_locs[0:1]*self.env.dim_x, n_samples)
-            conditions = [[[np.array([0]), start_loc[0:1,1:]]]] * n_samples
+            conditions = [[[np.array([0]), start_loc[0:1, 1:]]]] * n_samples
             # conditions = [[[[], []]]] * n_samples
 
             ## [ n_samples x horizon x (action_dim + observation_dim) ]
-            samples = self.model.conditional_sample(global_cond, conditions, sample_type="constrained")
+            samples = self.model.conditional_sample(
+                global_cond, conditions, sample_type="constrained"
+            )
             samples = self.unnormalize(to_np(samples))
-            downsampled_paths = np.clip(samples[:, ::3, :], a_min=0, a_max=self.env.dim_x-1).astype(int)
+            downsampled_paths = np.clip(
+                samples[:, ::3, :], a_min=0, a_max=self.env.dim_x - 1
+            ).astype(int)
             if plot:
                 plot_multiple_paths(downsampled_paths)
             path_sample = downsampled_paths[np.random.randint(n_samples)]
             self.actions = self.convert_path_to_actions(path_sample)
         return self.actions.pop(0)
 
-    def construct_conditions(self, normalized_start_loc, unnormalized_hideout_locs, n_samples):
+    def construct_conditions(
+        self, normalized_start_loc, unnormalized_hideout_locs, n_samples
+    ):
         hideoutID_hideoutLoc = unnormalized_hideout_locs.view(-1, 2).clone()
         normalized_hideout_locs = self.normalize(hideoutID_hideoutLoc)
         # INFO: conditioned on random hideout
-        conditions = [[[np.array([0]), normalized_start_loc], [np.array([239]), normalized_hideout_locs[np.random.randint(normalized_hideout_locs.shape[0])]]] for _ in range(n_samples)]
+        conditions = [
+            [
+                [np.array([0]), normalized_start_loc],
+                [
+                    np.array([239]),
+                    normalized_hideout_locs[
+                        np.random.randint(normalized_hideout_locs.shape[0])
+                    ],
+                ],
+            ]
+            for _ in range(n_samples)
+        ]
         # INFO: conditioned on all hideout
         # conditions = [[[np.array([0]), normalized_start_loc], [np.array([239]), normalized_hideout_locs]] for _ in range(n_samples)]
         return conditions
 
     def convert_path_to_actions(self, path):
-        """ Converts list of points on path to list of actions (speed, thetas)
-            This function accounts for the fact that our simulator rounds actions to 
-            fit on the grid map.
+        """Converts list of points on path to list of actions (speed, thetas)
+        This function accounts for the fact that our simulator rounds actions to
+        fit on the grid map.
         """
         actions = []
         currentpos = path[0]
@@ -471,16 +532,16 @@ class DiffusionGlobalPlanner(object):
         return actions
 
     def convert_traj_to_action(self, curr_loc, next_loc):
-        dist = (np.linalg.norm(np.asarray(curr_loc) - np.asarray(next_loc)))
+        dist = np.linalg.norm(np.asarray(curr_loc) - np.asarray(next_loc))
         speed = min(dist, self.max_speed)
         theta = np.arctan2(next_loc[1] - curr_loc[1], next_loc[0] - curr_loc[0])
         action = np.array([speed, theta], dtype=np.float32)
         return action
 
     def get_actions_between_two_points(self, startpos, endpos):
-        """ Returns list of actions (speed, thetas) to traverse between two points.
-            This function accounts for the fact that our simulator rounds actions to 
-            fit on the grid map.
+        """Returns list of actions (speed, thetas) to traverse between two points.
+        This function accounts for the fact that our simulator rounds actions to
+        fit on the grid map.
         """
         currentpos = startpos
         actions = []
@@ -488,7 +549,7 @@ class DiffusionGlobalPlanner(object):
             action = np.array([0, 0], dtype=np.float32)
             actions.append(action)
         while np.array_equal(currentpos, endpos) == False:
-            dist = (np.linalg.norm(np.asarray(currentpos) - np.asarray(endpos)))
+            dist = np.linalg.norm(np.asarray(currentpos) - np.asarray(endpos))
             speed = min(dist, self.max_speed)
             try:
                 # currentpos = np.clip(currentpos, -1e10, 2428)
@@ -507,7 +568,7 @@ class DiffusionGlobalPlanner(object):
             currentpos = self.simulate_action(currentpos, action)
 
             # if self.terrain.world_representation[0, currentpos[0], currentpos[1]] == False:
-                # print("In mountain!!")
+            # print("In mountain!!")
 
         return actions
 
@@ -521,24 +582,63 @@ class DiffusionGlobalPlanner(object):
         return new_location
 
     def unnormalize(self, sample):
-            x = sample[..., 0]
-            sample[..., 0] = ((x + 1) / 2) * (self.max_x - self.min_x) + self.min_x
+        sample = copy.deepcopy(sample)
 
-            y = sample[..., 1]
-            sample[..., 1] = ((y + 1) / 2) * (self.max_y - self.min_y) + self.min_y
-            return sample
+        # Ensure CPU NumPy before doing NumPy ops
+        if torch.is_tensor(sample):
+            sample = sample.detach().cpu().numpy()
+
+        x = sample[..., 0]
+        sample[..., 0] = ((x + 1) / 2) * (self.max_x - self.min_x) + self.min_x
+
+        y = sample[..., 1]
+        sample[..., 1] = ((y + 1) / 2) * (self.max_y - self.min_y) + self.min_y
+        return sample
 
     def normalize(self, arr):
-            x = arr[..., 0]
-            arr[..., 0] = ((x - self.min_x) / (self.max_x - self.min_x)) * 2 - 1
+        x = arr[..., 0]
+        arr[..., 0] = ((x - self.min_x) / (self.max_x - self.min_x)) * 2 - 1
 
-            y = arr[..., 1]
-            arr[..., 1] = ((y - self.min_y) / (self.max_y - self.min_y)) * 2 - 1
-            return arr
+        y = arr[..., 1]
+        arr[..., 1] = ((y - self.min_y) / (self.max_y - self.min_y)) * 2 - 1
+        return arr
+
 
 class DiffusionStateOnlyGlobalPlanner(object):
-    def __init__(self, env, diffusion_path, plot, traj_grader_path, costmap=None, res=None, sel=False) -> None:
-        self.model = torch.load(diffusion_path)
+    def __init__(
+        self,
+        env,
+        diffusion_path,
+        plot,
+        traj_grader_path,
+        costmap=None,
+        res=None,
+        sel=False,
+    ) -> None:
+        try:
+            from torch.serialization import add_safe_globals  # PyTorch >=2.6
+
+            try:
+                # Allowlist the custom class name used by older checkpoints if needed
+                from diffuser.models.diffusion import GaussianDiffusion as _GD
+
+                add_safe_globals([_GD])
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+        self.model = torch.load(diffusion_path, map_location="cpu", weights_only=False)
+
+        _target_device = (
+            "mps"
+            if hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+            else ("cuda" if torch.cuda.is_available() else "cpu")
+        )
+        if hasattr(self.model, "to"):
+            self.model = self.model.to(_target_device)
+        if hasattr(self.model, "eval"):
+            self.model.eval()
         self.env = env
         self.actions = []
         self.max_x, self.max_y = (self.env.dim_x, self.env.dim_y)
@@ -571,16 +671,36 @@ class DiffusionStateOnlyGlobalPlanner(object):
                 # INFO: generate lots of global path at the same time
                 hideout_division = [10, 10, 10]
 
-        global_cond, local_cond = self.env.construct_diffusion_conditions(cond_on_hideout_num=hideout_division)
+        global_cond, local_cond = self.env.construct_diffusion_conditions(
+            cond_on_hideout_num=hideout_division
+        )
+
+        best_traj_id = 0 
+        sample_np = None
+
         # global_cond: {'hideouts': tensor([[-0.8072, -0... 0.8731]]), 'red_start': tensor([[0.0000, 0.8... 0.9811]])}, dim: [batch_size, feat_dim]
         while valid_path is False:
             start = time.time()
-            sample = self.model.conditional_sample(global_cond=global_cond, cond=local_cond, sample_type="constrained", estimator=self.traj_grader)
+            sample = self.model.conditional_sample(
+                global_cond=global_cond,
+                cond=local_cond,
+                sample_type="constrained",
+                estimator=self.traj_grader,
+            )
+
+
             end = time.time()
             one_rrt_time = end - start
             # print("inner loop time: ", one_rrt_time)
+
+            
+            
             sample = self.unnormalize(sample)
+            sample_np = to_cpu_numpy(sample) 
+
             dense_path = self.interpolate_paths(sample, total_dense_path_num=100)
+
+            self.env.waypoints = to_cpu_numpy(sample)[best_traj_id].astype(np.float32)
 
             # INFO: select best trajectory
             if self.costmap is not None:
@@ -589,7 +709,12 @@ class DiffusionStateOnlyGlobalPlanner(object):
                 best_traj_id = 0
 
             # INFO: if candidate sample collide with mountain?
-            if all(np.linalg.norm(dense_path[best_traj_id] - np.array([[1600, 1800]]), axis=1) > 140):
+            if all(
+                np.linalg.norm(
+                    dense_path[best_traj_id] - np.array([[1600, 1800]]), axis=1
+                )
+                > 140
+            ):
                 valid_path = True
 
         self.env.waypoints = sample[best_traj_id]
@@ -597,28 +722,62 @@ class DiffusionStateOnlyGlobalPlanner(object):
         if self.plot_flag:
             # INFO: Define custom colorbar
             boundaries = [0, 0.2, 0.5, 1.0]  # Adjust the boundaries as needed
-            colors = ['black', 'brown', 'orange', 'oldlace']  # Adjust the colors as needed
-            cmap2 = mcolors.LinearSegmentedColormap.from_list('cmap2', list(zip(boundaries, colors)))
+            colors = [
+                "black",
+                "brown",
+                "orange",
+                "oldlace",
+            ]  # Adjust the colors as needed
+            cmap2 = mcolors.LinearSegmentedColormap.from_list(
+                "cmap2", list(zip(boundaries, colors))
+            )
 
-            hideouts = self.unnormalize(global_cond["hideouts"].reshape(-1, 3, 2)).detach().cpu().numpy()
+            hideouts = (
+                self.unnormalize(global_cond["hideouts"].reshape(-1, 3, 2))
+                .detach()
+                .cpu()
+                .numpy()
+            )
             starts = self.unnormalize(global_cond["red_start"]).detach().cpu().numpy()
             figure, axes = plt.subplots()
             for sample_idx in range(sum(hideout_division)):
-                if all(np.linalg.norm(dense_path[sample_idx] - np.array([[1600, 1800]]), axis=1) > 140):
-                    axes.plot(sample[sample_idx,:,0], sample[sample_idx,:,1], c='cyan', alpha=0.5)
-                axes.scatter(hideouts[sample_idx,:,0], hideouts[sample_idx,:,1], c='violet', s=80)
-                axes.scatter(starts[sample_idx,0], starts[sample_idx,1], c='g', s=80)
+                if all(
+                    np.linalg.norm(
+                        dense_path[sample_idx] - np.array([[1600, 1800]]), axis=1
+                    )
+                    > 140
+                ):
+                    axes.plot(
+                        sample[sample_idx, :, 0],
+                        sample[sample_idx, :, 1],
+                        c="cyan",
+                        alpha=0.5,
+                    )
+                axes.scatter(
+                    hideouts[sample_idx, :, 0],
+                    hideouts[sample_idx, :, 1],
+                    c="violet",
+                    s=80,
+                )
+                axes.scatter(starts[sample_idx, 0], starts[sample_idx, 1], c="g", s=80)
                 # plt.scatter(1600, 1800, s=150)
-            axes.plot(sample[best_traj_id,:,0], sample[best_traj_id,:,1], 'y', linewidth=3)
-            axes.imshow(self.costmap, extent=(0, 2428, 0, 2428), cmap=cmap2, interpolation='nearest')
-            plt.axis('off')
-            
+            axes.plot(
+                sample[best_traj_id, :, 0], sample[best_traj_id, :, 1], "y", linewidth=3
+            )
+            axes.imshow(
+                self.costmap,
+                extent=(0, 2428, 0, 2428),
+                cmap=cmap2,
+                interpolation="nearest",
+            )
+            plt.axis("off")
+
             # circle = plt.Circle(( 1600 , 1800 ), 150 )
             # axes.add_artist( circle )
-            plt.axis('square')
+            plt.axis("square")
             plt.xlim(0, 2428)
             plt.ylim(0, 2428)
-            plt.savefig('candidates_nozone_%d.png' % seed, dpi=100, bbox_inches='tight')
+            plt.savefig("candidates_nozone_%d.png" % seed, dpi=100, bbox_inches="tight")
             # plt.show()
 
             # plt.figure()
@@ -628,30 +787,38 @@ class DiffusionStateOnlyGlobalPlanner(object):
         return sample.tolist()
 
     def interpolate_paths(self, paths, total_dense_path_num):
+        
+        
+        if torch.is_tensor(paths):
+            paths = paths.detach().cpu().numpy()
+        paths = to_cpu_numpy(paths) 
         batchsize, waypt_num, coordinates = paths.shape
-        new_paths = np.zeros((batchsize, total_dense_path_num, coordinates))
+        new_paths = np.zeros((batchsize, total_dense_path_num, coordinates), dtype=paths.dtype)
 
         for i in range(batchsize):
             for j in range(coordinates):
                 new_paths[i, :, j] = np.interp(
                     np.linspace(0, 1, total_dense_path_num),
                     np.linspace(0, 1, waypt_num),
-                    paths[i, :, j]
+                    paths[i, :, j],
                 )
 
         return new_paths
 
     def select_traj(self, dense_path, costmap, res):
         grading_path = (dense_path // res).astype(int)
-        grading_path_len = np.sum(np.linalg.norm(grading_path[:,1:,:]-grading_path[:,:-1,:], axis=-1), axis=-1)
-        costs = costmap[costmap.shape[0]-1-grading_path[:, :, 1], grading_path[:, :, 0]]
+        grading_path_len = np.sum(
+            np.linalg.norm(grading_path[:, 1:, :] - grading_path[:, :-1, :], axis=-1),
+            axis=-1,
+        )
+        costs = costmap[
+            costmap.shape[0] - 1 - grading_path[:, :, 1], grading_path[:, :, 0]
+        ]
         # INFO: Calculate the average cost along the trajectory axis
         sum_costs = np.sum(costs, axis=1) * grading_path_len
         # INFO: Get the trajectory index with the lowest cost
         best_traj_idx = np.argmin(sum_costs)
         return best_traj_idx
-
-
 
     def unnormalize(self, sample):
 
@@ -675,8 +842,11 @@ class DiffusionStateOnlyGlobalPlanner(object):
         arr[..., 1] = ((y - self.min_y) / (self.max_y - self.min_y)) * 2 - 1
         return arr
 
+
 class DiffusionGlobalPlannerHideout(DiffusionGlobalPlanner):
-    def __init__(self, env, diffusion, ema, estimator, max_speed, plot, plot_traj_num) -> None:
+    def __init__(
+        self, env, diffusion, ema, estimator, max_speed, plot, plot_traj_num
+    ) -> None:
         super().__init__(env, diffusion, ema, max_speed, plot, plot_traj_num)
         self.scale = (20, 20)
         pooled = self.convert_map_for_astar()
@@ -702,19 +872,32 @@ class DiffusionGlobalPlannerHideout(DiffusionGlobalPlanner):
         return (self.raw_red_traj + 1) / 2
 
     def update_raw_red_downsampled_traj(self, new_red_downsampled_traj):
-        red_loc = ((torch.Tensor(self.env.prisoner.location).to(global_device_name) / self.env.dim_x) * 2 - 1).unsqueeze(0)
-        self.raw_red_traj = new_red_downsampled_traj * 2 - 1 
-        min_dist_pt_idx = torch.argmin(torch.norm(self.raw_red_traj-red_loc, dim=-1))
-        self.raw_red_traj = torch.cat((red_loc, self.raw_red_traj[min_dist_pt_idx:, :]), dim=0)
+        red_loc = (
+            (
+                torch.Tensor(self.env.prisoner.location).to(global_device_name)
+                / self.env.dim_x
+            )
+            * 2
+            - 1
+        ).unsqueeze(0)
+        self.raw_red_traj = new_red_downsampled_traj * 2 - 1
+        min_dist_pt_idx = torch.argmin(torch.norm(self.raw_red_traj - red_loc, dim=-1))
+        self.raw_red_traj = torch.cat(
+            (red_loc, self.raw_red_traj[min_dist_pt_idx:, :]), dim=0
+        )
         self.gmap.plot()
-        plot_path(self.unnormalize(to_np(self.raw_red_traj)), self.env.hideout_locations, point_period=1)
+        plot_path(
+            self.unnormalize(to_np(self.raw_red_traj)),
+            self.env.hideout_locations,
+            point_period=1,
+        )
         return
 
     def update_red_actions(self):
         digit_traj = self.unnormalize(to_np(self.raw_red_traj))
-        digit_traj = np.clip(digit_traj, a_min=0, a_max=self.env.dim_x-1).astype(int)
+        digit_traj = np.clip(digit_traj, a_min=0, a_max=self.env.dim_x - 1).astype(int)
         self.actions = self.convert_path_to_actions(digit_traj)
-        return 
+        return
 
     def predict(self, observation, dataset, deterministic=True):
         return self.get_desired_action(observation, dataset)
@@ -722,7 +905,9 @@ class DiffusionGlobalPlannerHideout(DiffusionGlobalPlanner):
     def get_desired_action(self, observation, dataset):
         # self.observations.process_observation(observation)
 
-        desired_action, hideout = self.generate_path_samples(dataset, plot=self.plot_flag)
+        desired_action, hideout = self.generate_path_samples(
+            dataset, plot=self.plot_flag
+        )
         # desired_action = self.action_to_random_hideout()
         # import time
         # time.sleep(1)
@@ -733,21 +918,38 @@ class DiffusionGlobalPlannerHideout(DiffusionGlobalPlanner):
         # def multiHideout_collate_fn(batch):
         #     return repeat_collate_fn(batch, n_samples)
         multiHideout_collate_fn = lambda batch: repeat_collate_fn(batch, n_samples)
-        self.dataloader = cycle(torch.utils.data.DataLoader(dataset, batch_size=1, num_workers=0, shuffle=True, pin_memory=False, collate_fn=multiHideout_collate_fn))
+        self.dataloader = cycle(
+            torch.utils.data.DataLoader(
+                dataset,
+                batch_size=1,
+                num_workers=0,
+                shuffle=True,
+                pin_memory=False,
+                collate_fn=multiHideout_collate_fn,
+            )
+        )
         batch = self.dataloader.__next__()
         _, global_cond, conditions = batch
         ## [ n_samples x horizon x (action_dim + observation_dim) ]
-        samples = self.model.conditional_sample(global_cond, conditions, sample_type="constrained", horizon=240, estimator=self.traj_grader)
+        samples = self.model.conditional_sample(
+            global_cond,
+            conditions,
+            sample_type="constrained",
+            horizon=240,
+            estimator=self.traj_grader,
+        )
         unnormalized_samples = self.unnormalize(to_np(samples))
-        downsampled_paths = np.clip(unnormalized_samples[:, ::1, :], a_min=0, a_max=self.env.dim_x-1).astype(int)
+        downsampled_paths = np.clip(
+            unnormalized_samples[:, ::1, :], a_min=0, a_max=self.env.dim_x - 1
+        ).astype(int)
         # if plot:
         #     self.gmap.plot()
         #     plot_multiple_paths(downsampled_paths, self.env.hideout_locations)
         sel_traj_idx = np.random.randint(n_samples)
         self.path_sample = downsampled_paths[sel_traj_idx]
         self.hideout = global_cond["hideouts"][sel_traj_idx]
-        self.raw_red_traj = samples[sel_traj_idx,::4,:2]
-        print("Reward Est. = ", self.traj_grader(samples[:,::4,:2])[sel_traj_idx])
+        self.raw_red_traj = samples[sel_traj_idx, ::4, :2]
+        print("Reward Est. = ", self.traj_grader(samples[:, ::4, :2])[sel_traj_idx])
         if plot:
             # plot_path(path_sample[...,:2])
             self.gmap.plot()
@@ -756,12 +958,19 @@ class DiffusionGlobalPlannerHideout(DiffusionGlobalPlanner):
             # INFO: Plot red path only
             plot_path(self.path_sample, self.env.hideout_locations)
 
-        return self.path_sample[::4,...,0:2], self.path_sample[:,...,2:4], self.path_sample[:,...,4:6], self.hideout
+        return (
+            self.path_sample[::4, ..., 0:2],
+            self.path_sample[:, ..., 2:4],
+            self.path_sample[:, ..., 4:6],
+            self.hideout,
+        )
 
-    def generate_path_samples(self, dataset, n_samples=10, refresh_period=239, plot=True):
-        '''
-            generate samples from (ema) diffusion model
-        '''
+    def generate_path_samples(
+        self, dataset, n_samples=10, refresh_period=239, plot=True
+    ):
+        """
+        generate samples from (ema) diffusion model
+        """
         # self.model.n_timesteps = 30
         # self.ema_model.n_timesteps = 30
         if self.traj_id % refresh_period == 0 or len(self.actions) == 0:
@@ -770,22 +979,45 @@ class DiffusionGlobalPlannerHideout(DiffusionGlobalPlanner):
             # def multiHideout_collate_fn(batch):
             #     return repeat_collate_fn(batch, n_samples)
             multiHideout_collate_fn = lambda batch: repeat_collate_fn(batch, n_samples)
-            self.dataloader = cycle(torch.utils.data.DataLoader(dataset, batch_size=1, num_workers=0, shuffle=True, pin_memory=False, collate_fn=multiHideout_collate_fn))
+            self.dataloader = cycle(
+                torch.utils.data.DataLoader(
+                    dataset,
+                    batch_size=1,
+                    num_workers=0,
+                    shuffle=True,
+                    pin_memory=False,
+                    collate_fn=multiHideout_collate_fn,
+                )
+            )
             batch = self.dataloader.__next__()
             _, global_cond, conditions = batch
             ## [ n_samples x horizon x (action_dim + observation_dim) ]
-            samples = self.model.conditional_sample(global_cond, conditions, sample_type="constrained", horizon=240, estimator=self.traj_grader)
+            samples = self.model.conditional_sample(
+                global_cond,
+                conditions,
+                sample_type="constrained",
+                horizon=240,
+                estimator=self.traj_grader,
+            )
             unnormalized_samples = self.unnormalize(to_np(samples))
-            downsampled_paths = np.clip(unnormalized_samples[:, ::1, :], a_min=0, a_max=self.env.dim_x-1).astype(int)
+            downsampled_paths = np.clip(
+                unnormalized_samples[:, ::1, :], a_min=0, a_max=self.env.dim_x - 1
+            ).astype(int)
             # if plot:
             #     self.gmap.plot()
             #     plot_multiple_paths(downsampled_paths, self.env.hideout_locations)
             sel_traj_idx = np.random.randint(n_samples)
             self.path_sample = downsampled_paths[sel_traj_idx]
             self.hideout = global_cond["hideouts"][sel_traj_idx]
-            uniform_path = generate_uniform_path(self.path_sample, self.hideout, total_points=60, normalized_path=False, normalized_hideout=True)
-            self.raw_red_traj = samples[sel_traj_idx,::4,:2]
-            print("Reward Est. = ", self.traj_grader(samples[:,::1,:2])[sel_traj_idx])
+            uniform_path = generate_uniform_path(
+                self.path_sample,
+                self.hideout,
+                total_points=60,
+                normalized_path=False,
+                normalized_hideout=True,
+            )
+            self.raw_red_traj = samples[sel_traj_idx, ::4, :2]
+            print("Reward Est. = ", self.traj_grader(samples[:, ::1, :2])[sel_traj_idx])
             if plot:
                 # plot_path(path_sample[...,:2])
                 self.gmap.plot()
@@ -823,7 +1055,7 @@ class DiffusionGlobalPlannerHideout(DiffusionGlobalPlanner):
         return obs
 
     def convert_map_for_astar(self):
-        """ Reduce the size of the map for the Astar algorithm """
+        """Reduce the size of the map for the Astar algorithm"""
         mountains = copy.deepcopy(self.env.terrain.world_representation[0, :, :])
         terrain_map = copy.deepcopy(self.env.terrain.world_representation[1, :, :])
 
@@ -842,15 +1074,19 @@ class DiffusionGlobalPlannerHideout(DiffusionGlobalPlanner):
         terrain_map = np.flipud(np.rot90(terrain_map, k=1))
         return terrain_map
 
-    
+
 class DiffusionGlobalPlannerSelHideouts(DiffusionGlobalPlannerHideout):
-    def __init__(self, env, diffusion, ema, estimator, max_speed, plot, plot_traj_num) -> None:
+    def __init__(
+        self, env, diffusion, ema, estimator, max_speed, plot, plot_traj_num
+    ) -> None:
         super().__init__(env, diffusion, ema, estimator, max_speed, plot, plot_traj_num)
 
-    def generate_path_samples(self, dataset, n_samples=10, refresh_period=239, plot=True):
-        '''
-            generate samples from (ema) diffusion model
-        '''
+    def generate_path_samples(
+        self, dataset, n_samples=10, refresh_period=239, plot=True
+    ):
+        """
+        generate samples from (ema) diffusion model
+        """
         # self.model.n_timesteps = 30
         # self.ema_model.n_timesteps = 30
         if self.traj_id % refresh_period == 0 or len(self.actions) == 0:
@@ -859,39 +1095,71 @@ class DiffusionGlobalPlannerSelHideouts(DiffusionGlobalPlannerHideout):
             # def multiHideout_collate_fn(batch):
             #     return repeat_collate_fn(batch, n_samples)
             selHideout_collate_fn = lambda batch: repeat_collate_fn(batch, n_samples)
-            self.dataloader = cycle(torch.utils.data.DataLoader(dataset, batch_size=1, num_workers=0, shuffle=True, pin_memory=False, collate_fn=selHideout_collate_fn))
+            self.dataloader = cycle(
+                torch.utils.data.DataLoader(
+                    dataset,
+                    batch_size=1,
+                    num_workers=0,
+                    shuffle=True,
+                    pin_memory=False,
+                    collate_fn=selHideout_collate_fn,
+                )
+            )
             batch = self.dataloader.__next__()
             _, global_cond, conditions = batch
-            print("hideout = ", global_cond["hideouts"][0], global_cond["hideouts"][11], global_cond["hideouts"][21])
+            print(
+                "hideout = ",
+                global_cond["hideouts"][0],
+                global_cond["hideouts"][11],
+                global_cond["hideouts"][21],
+            )
             ## [ n_samples x horizon x (action_dim + observation_dim) ]
-            samples = self.model.conditional_sample(global_cond, conditions, sample_type="constrained", horizon=240, estimator=self.traj_grader)
+            samples = self.model.conditional_sample(
+                global_cond,
+                conditions,
+                sample_type="constrained",
+                horizon=240,
+                estimator=self.traj_grader,
+            )
             unnormalized_samples = self.unnormalize(to_np(samples))
-            downsampled_paths = np.clip(unnormalized_samples[:, ::1, :], a_min=0, a_max=self.env.dim_x-1).astype(int)
+            downsampled_paths = np.clip(
+                unnormalized_samples[:, ::1, :], a_min=0, a_max=self.env.dim_x - 1
+            ).astype(int)
             # if plot:
             #     self.gmap.plot()
             #     plot_multiple_paths(downsampled_paths, self.env.hideout_locations)
-            traj_grades = self.traj_grader(samples[:,::4,0:2])
-            traj_grades_mean = [traj_grades[i*n_samples:(i+1)*n_samples].mean() for i in range(traj_grades.shape[0]//n_samples)]
+            traj_grades = self.traj_grader(samples[:, ::4, 0:2])
+            traj_grades_mean = [
+                traj_grades[i * n_samples : (i + 1) * n_samples].mean()
+                for i in range(traj_grades.shape[0] // n_samples)
+            ]
             # sorted_indices = sorted(range(len(traj_grades)), key=lambda idx: -traj_grades_mean[idx].item())
             _, sorted_indices = torch.sort(traj_grades.view(-1), descending=True)
-            sel_traj_idx = sorted_indices[0] # sorted_indices[0], np.random.randint(n_samples)
+            sel_traj_idx = sorted_indices[
+                0
+            ]  # sorted_indices[0], np.random.randint(n_samples)
             self.path_sample = downsampled_paths[sel_traj_idx]
             self.hideout = global_cond["hideouts"][sel_traj_idx]
-            self.raw_red_traj = samples[sel_traj_idx,::4,0:2]
+            self.raw_red_traj = samples[sel_traj_idx, ::4, 0:2]
             print("Reward Est. = ", traj_grades_mean)
             if plot:
                 # plot_path(path_sample[...,:2])
-                
+
                 self.gmap.plot()
                 # INFO: Plot red+blue paths
-                plot_both_paths(np.expand_dims(self.path_sample, axis=0), self.env.hideout_locations, self.plot_traj_num)
+                plot_both_paths(
+                    np.expand_dims(self.path_sample, axis=0),
+                    self.env.hideout_locations,
+                    self.plot_traj_num,
+                )
                 # INFO: Plot red path only
                 # plot_path(self.path_sample, self.env.hideout_locations)
 
             # INFO: This is for path->actions
-            self.actions = self.convert_path_to_actions(self.path_sample[:refresh_period:4,...,0:2])
+            self.actions = self.convert_path_to_actions(
+                self.path_sample[:refresh_period:4, ..., 0:2]
+            )
             print("The length of action is: ", len(self.actions))
-
 
         # INFO: This is for traj->actions
         # action = self.convert_traj_to_action(self.env.prisoner.location, self.path_sample[...,self.traj_id+1,:2])
@@ -906,38 +1174,77 @@ class DiffusionGlobalPlannerSelHideouts(DiffusionGlobalPlannerHideout):
         # def multiHideout_collate_fn(batch):
         #     return repeat_collate_fn(batch, n_samples)
         selHideout_collate_fn = lambda batch: repeat_collate_fn(batch, n_samples)
-        self.dataloader = cycle(torch.utils.data.DataLoader(dataset, batch_size=1, num_workers=0, shuffle=True, pin_memory=False, collate_fn=selHideout_collate_fn))
+        self.dataloader = cycle(
+            torch.utils.data.DataLoader(
+                dataset,
+                batch_size=1,
+                num_workers=0,
+                shuffle=True,
+                pin_memory=False,
+                collate_fn=selHideout_collate_fn,
+            )
+        )
         batch = self.dataloader.__next__()
         _, global_cond, conditions = batch
-        print("hideout = ", global_cond["hideouts"][0], global_cond["hideouts"][11], global_cond["hideouts"][21])
+        print(
+            "hideout = ",
+            global_cond["hideouts"][0],
+            global_cond["hideouts"][11],
+            global_cond["hideouts"][21],
+        )
         ## [ n_samples x horizon x (action_dim + observation_dim) ]
-        samples = self.model.conditional_sample(global_cond, conditions, sample_type="constrained", horizon=240, estimator=self.traj_grader)
+        samples = self.model.conditional_sample(
+            global_cond,
+            conditions,
+            sample_type="constrained",
+            horizon=240,
+            estimator=self.traj_grader,
+        )
         unnormalized_samples = self.unnormalize(to_np(samples))
-        downsampled_paths = np.clip(unnormalized_samples[:, ::1, :], a_min=0, a_max=self.env.dim_x-1).astype(int)
+        downsampled_paths = np.clip(
+            unnormalized_samples[:, ::1, :], a_min=0, a_max=self.env.dim_x - 1
+        ).astype(int)
         # if plot:
         #     self.gmap.plot()
         #     plot_multiple_paths(downsampled_paths, self.env.hideout_locations)
-        traj_grades = self.traj_grader(samples[:,::4,0:2])
-        traj_grades_mean = [traj_grades[i*n_samples:(i+1)*n_samples].mean() for i in range(traj_grades.shape[0]//n_samples)]
+        traj_grades = self.traj_grader(samples[:, ::4, 0:2])
+        traj_grades_mean = [
+            traj_grades[i * n_samples : (i + 1) * n_samples].mean()
+            for i in range(traj_grades.shape[0] // n_samples)
+        ]
         # sorted_indices = sorted(range(len(traj_grades)), key=lambda idx: -traj_grades_mean[idx].item())
         _, sorted_indices = torch.sort(traj_grades.view(-1), descending=True)
-        sel_traj_idx = sorted_indices[0] # sorted_indices[0], np.random.randint(n_samples)
+        sel_traj_idx = sorted_indices[
+            0
+        ]  # sorted_indices[0], np.random.randint(n_samples)
         self.path_sample = downsampled_paths[sel_traj_idx]
         self.hideout = global_cond["hideouts"][sel_traj_idx]
-        self.raw_red_traj = samples[sel_traj_idx,::4,0:2]
+        self.raw_red_traj = samples[sel_traj_idx, ::4, 0:2]
         print("Reward Est. = ", traj_grades_mean)
         if plot:
             # plot_path(path_sample[...,:2])
-            
+
             self.gmap.plot()
             # INFO: Plot red+blue paths
-            plot_both_paths(np.expand_dims(self.path_sample, axis=0), self.env.hideout_locations, self.plot_traj_num)
+            plot_both_paths(
+                np.expand_dims(self.path_sample, axis=0),
+                self.env.hideout_locations,
+                self.plot_traj_num,
+            )
             # INFO: Plot red path only
             # plot_path(self.path_sample, self.env.hideout_locations)
 
-        return self.path_sample[::4,...,0:2], self.path_sample[:,...,2:4], self.path_sample[:,...,4:6], self.hideout
+        return (
+            self.path_sample[::4, ..., 0:2],
+            self.path_sample[:, ..., 2:4],
+            self.path_sample[:, ..., 4:6],
+            self.hideout,
+        )
 
-def generate_uniform_path(path_sample, hideout, total_points, normalized_path=True, normalized_hideout=True):
+
+def generate_uniform_path(
+    path_sample, hideout, total_points, normalized_path=True, normalized_hideout=True
+):
     if normalized_path:
         path_sample = to_np(path_sample) * 2428
     else:
@@ -948,16 +1255,24 @@ def generate_uniform_path(path_sample, hideout, total_points, normalized_path=Tr
     else:
         hideout = to_np(hideout)
 
-    prisoner_traj = path_sample[:,...,0:2]
+    prisoner_traj = path_sample[:, ..., 0:2]
     prisoner_to_hideout_dist = np.linalg.norm(hideout - prisoner_traj, axis=-1)
     idx_of_traj_pt_closest_to_hideout = np.argmin(prisoner_to_hideout_dist)
 
-    prisoner_traj_cut = np.concatenate((prisoner_traj[:idx_of_traj_pt_closest_to_hideout+1,:], np.expand_dims(hideout, axis=0)), axis=0)
+    prisoner_traj_cut = np.concatenate(
+        (
+            prisoner_traj[: idx_of_traj_pt_closest_to_hideout + 1, :],
+            np.expand_dims(hideout, axis=0),
+        ),
+        axis=0,
+    )
 
     line = LineString(prisoner_traj_cut)
     distances = np.linspace(0, line.length, total_points)
     points = [line.interpolate(distance) for distance in distances]
-    path = np.floor(np.array([[points[i].x, points[i].y] for i in (range(len(points)))]))
+    path = np.floor(
+        np.array([[points[i].x, points[i].y] for i in (range(len(points)))])
+    )
     # path = unary_union(points)
     return path
     # # Calculate the cumulative distances between consecutive points

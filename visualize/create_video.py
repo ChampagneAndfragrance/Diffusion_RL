@@ -1,7 +1,7 @@
 from simulator.prisoner_env_variations import initialize_prisoner_environment
 import numpy as np
 import torch
-from simulator.prisoner_batch_wrapper import PrisonerBatchEnv
+#from simulator.prisoner_batch_wrapper import PrisonerBatchEnv
 from fugitive_policies.heuristic import HeuristicPolicy
 from simulator.prisoner_env import PrisonerEnv
 from simulator.prisoner_env_variations import initialize_prisoner_environment
@@ -12,7 +12,7 @@ from visualize.render_utils import combine_game_heatmap, save_video, plot_mog_he
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import multivariate_normal
-from datasets.load_datasets import load_datasets
+#from datasets.load_datasets import load_datasets
 from models.configure_model import configure_model
 import yaml
 

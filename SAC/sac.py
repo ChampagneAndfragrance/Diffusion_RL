@@ -353,14 +353,23 @@ class SAC(object):
 
     # Load model parameters
     def init_from_save(self, ckpt_path, evaluate=False):
+        device = (
+            torch.device("mps") if hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+            else (torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"))
+        )
         print('Loading models from {}'.format(ckpt_path))
         if ckpt_path is not None:
-            checkpoint = torch.load(ckpt_path)
-            self.policy.load_state_dict(checkpoint['policy_state_dict'])
-            self.critic.load_state_dict(checkpoint['critic_state_dict'])
-            self.critic_target.load_state_dict(checkpoint['critic_target_state_dict'])
+            # map_location fixes “Attempting to deserialize object on a CUDA device…”
+            checkpoint = torch.load(str(ckpt_path), map_location=device, weights_only=False)
+            self.policy.load_state_dict(checkpoint['policy_state_dict'], strict=False)
+            self.critic.load_state_dict(checkpoint['critic_state_dict'], strict=False)
+            self.critic_target.load_state_dict(checkpoint['critic_target_state_dict'], strict=False)
             self.critic_optim.load_state_dict(checkpoint['critic_optimizer_state_dict'])
             self.policy_optim.load_state_dict(checkpoint['policy_optimizer_state_dict'])
+            self.device = device
+            self.policy.to(self.device)
+            self.critic.to(self.device)
+            self.critic_target.to(self.device)
 
             if evaluate:
                 self.policy.eval()

@@ -99,12 +99,12 @@ class MovingObject(AbstractObject):
         if current_movement[0] == 'l':
             # self.path_v2(destination=(current_movement[1], current_movement[2]))
 
-            destination = np.array([current_movement[1], current_movement[2]], dtype=np.int)
+            destination = np.array([current_movement[1], current_movement[2]], dtype=int)
             sample_radius = 200
             while self.in_range_of_mountain(destination, 161)[1]:
                 destination = np.array([np.random.randint(destination[0] - sample_radius, destination[0] + sample_radius),
                                             np.random.randint(destination[1] - sample_radius, destination[1] + sample_radius)],
-                                            dtype=np.int)
+                                            dtype=int)
                 self.planned_path.pop(0)
                 self.planned_path = [('l', destination[0], destination[1])] + self.planned_path
 
@@ -121,12 +121,12 @@ class MovingObject(AbstractObject):
         elif current_movement[0] == 'ls':
             # self.path_v2(destination=(current_movement[1], current_movement[2]),
             #              constraint_speed=30, mountain_outer_range=150)  # spiral detection range=22, and make mountain behavior more conservative
-            destination = np.array([current_movement[1], current_movement[2]], dtype=np.int)
+            destination = np.array([current_movement[1], current_movement[2]], dtype=int)
             sample_radius = 200
             while self.in_range_of_mountain(destination, 161)[1]:
                 destination = np.array([np.random.randint(destination[0] - sample_radius, destination[0] + sample_radius),
                                             np.random.randint(destination[1] - sample_radius, destination[1] + sample_radius)],
-                                            dtype=np.int)
+                                            dtype=int)
                 self.planned_path.pop(0)
                 self.planned_path = [('l', destination[0], destination[1])] + self.planned_path
             # direction = self.transform_destination_to_direction(np.array([current_movement[1], current_movement[2]]))
@@ -361,8 +361,8 @@ class MovingObject(AbstractObject):
         else:
             # destination = (np.array([direction[0], direction[1]]) * speed).astype(np.int) + self.location
             distance_movement = speed
-        # destination = np.array(destination, dtype=np.int)
-        direction = np.array(direction, dtype=np.float)
+        # destination = np.array(destination, dtype=int)
+        direction = np.array(direction, dtype=float)
         # assert np.issubdtype(type(destination[0]), np.integer)
         # assert np.issubdtype(type(destination[1]), np.integer)
 
@@ -395,7 +395,7 @@ class MovingObject(AbstractObject):
         speed = min(speed, self.speed)
         step = direction * speed
         self.step_dist_xy = step
-        new_location = np.round([self.location[0] + step[0], self.location[1] + step[1]]).astype(np.int)
+        new_location = np.round([self.location[0] + step[0], self.location[1] + step[1]]).astype(int)
 
         desired_heading = np.arctan2(direction[1], direction[0])
         mountain_dist, mountain_in_range = self.in_range_of_mountain(new_location, mountain_outer_range)
@@ -433,7 +433,7 @@ class MovingObject(AbstractObject):
             self.location = new_location
 
         if self.terrain.violate_edge_constraints(self.location[0], self.location[1], 1, 1):
-            self.location = np.clip(self.location, [0, 0], [self.terrain.dim_x - 1, self.terrain.dim_y - 1]).astype(np.int)
+            self.location = np.clip(self.location, [0, 0], [self.terrain.dim_x - 1, self.terrain.dim_y - 1]).astype(int)
         if isinstance(self.location, np.ndarray):
             self.location = list(self.location)
         assert np.issubdtype(type(self.location[0]), np.integer)
@@ -505,7 +505,7 @@ class MovingObject(AbstractObject):
                 self.in_range_of_mountain(not_mountain_loc, 161)[1]:
             not_mountain_loc = np.array([np.random.randint(loc[0] - sample_radius, loc[0] + sample_radius),
                                          np.random.randint(loc[1] - sample_radius, loc[1] + sample_radius)],
-                                        dtype=np.int)
+                                        dtype=int)
         self.planned_path = [('l', not_mountain_loc[0], not_mountain_loc[1])]
 
     def plan_path_to_loc_para(self, speed_ratio, loc):
@@ -515,7 +515,7 @@ class MovingObject(AbstractObject):
                 self.in_range_of_mountain(not_mountain_loc, 161)[1]:
             not_mountain_loc = np.array([np.random.randint(loc[0] - sample_radius, loc[0] + sample_radius),
                                          np.random.randint(loc[1] - sample_radius, loc[1] + sample_radius)],
-                                        dtype=np.int)
+                                        dtype=int)
         self.planned_path = [('l', not_mountain_loc[0], not_mountain_loc[1], self.speed * speed_ratio)]
 
 
@@ -566,18 +566,18 @@ class MovingObject(AbstractObject):
             # calculate the tangent point
             x_tangent = (b_blue - b_fugitive) / (k_fugitive - k_blue)
             y_tangent = k_blue * x_tangent + b_blue
-            x_tangent, y_tangent = np.round(x_tangent).astype(np.int), np.round(y_tangent).astype(np.int)
-        tangent_point = np.array([x_tangent, y_tangent], dtype=np.float)
+            x_tangent, y_tangent = np.round(x_tangent).astype(int), np.round(y_tangent).astype(int)
+        tangent_point = np.array([x_tangent, y_tangent], dtype=float)
 
         # direction of the tangent point from the current fugitive loc
-        direction_tangent = np.array([x_tangent - current_loc[0], y_tangent - current_loc[1]], dtype=np.float)
+        direction_tangent = np.array([x_tangent - current_loc[0], y_tangent - current_loc[1]], dtype=float)
         is_blue_on_fugitive_movement_side = (direction_tangent[0] * np.cos(direction) > 0)
         # print(self, "is_blue_on_fugitive_side", is_blue_on_fugitive_movement_side)
         if is_blue_on_fugitive_movement_side:
             if self.terrain.violate_edge_constraints(x_tangent, y_tangent, 1, 1):
                 # tangent point is outside the terrain, go to the nearest point to the tangent point in terrain
-                x_tangent = np.clip(x_tangent, 0, self.terrain.dim_x - 1).astype(np.int)
-                y_tangent = np.clip(y_tangent, 0, self.terrain.dim_y - 1).astype(np.int)
+                x_tangent = np.clip(x_tangent, 0, self.terrain.dim_x - 1).astype(int)
+                y_tangent = np.clip(y_tangent, 0, self.terrain.dim_y - 1).astype(int)
                 self.planned_path = [('l', x_tangent, y_tangent)]
             else:
                 time_to_tangent_fugitive = distance(current_loc, tangent_point) / speed
@@ -661,18 +661,18 @@ class MovingObject(AbstractObject):
             # calculate the tangent point
             x_tangent = (b_blue - b_fugitive) / (k_fugitive - k_blue)
             y_tangent = k_blue * x_tangent + b_blue
-            x_tangent, y_tangent = np.round(x_tangent).astype(np.int), np.round(y_tangent).astype(np.int)
-        tangent_point = np.array([x_tangent, y_tangent], dtype=np.float)
+            x_tangent, y_tangent = np.round(x_tangent).astype(int), np.round(y_tangent).astype(int)
+        tangent_point = np.array([x_tangent, y_tangent], dtype=float)
 
         # direction of the tangent point from the current fugitive loc
-        direction_tangent = np.array([x_tangent - current_loc[0], y_tangent - current_loc[1]], dtype=np.float)
+        direction_tangent = np.array([x_tangent - current_loc[0], y_tangent - current_loc[1]], dtype=float)
         is_blue_on_fugitive_movement_side = (direction_tangent[0] * np.cos(direction) > 0)
         # print(self, "is_blue_on_fugitive_side", is_blue_on_fugitive_movement_side)
         if is_blue_on_fugitive_movement_side:
             if self.terrain.violate_edge_constraints(x_tangent, y_tangent, 1, 1):
                 # tangent point is outside the terrain, go to the nearest point to the tangent point in terrain
-                x_tangent = np.clip(x_tangent, 0, self.terrain.dim_x - 1).astype(np.int)
-                y_tangent = np.clip(y_tangent, 0, self.terrain.dim_y - 1).astype(np.int)
+                x_tangent = np.clip(x_tangent, 0, self.terrain.dim_x - 1).astype(int)
+                y_tangent = np.clip(y_tangent, 0, self.terrain.dim_y - 1).astype(int)
                 self.planned_path = [('l', x_tangent, y_tangent, 0.01 * self.speed)]
             else:
                 time_to_tangent_fugitive = distance(current_loc, tangent_point) / speed
