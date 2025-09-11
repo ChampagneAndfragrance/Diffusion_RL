@@ -1,3 +1,7 @@
+import sys, os
+sys.path.append(os.getcwd())
+
+
 from simulator.prisoner_env_variations import initialize_prisoner_environment
 import numpy as np
 import torch

@@ -1,3 +1,11 @@
+def get_device(use_cuda_flag: bool):
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    elif torch.cuda.is_available() and use_cuda_flag:
+        return torch.device("cuda")
+    else:
+        return torch.device("cpu")
+
 import os
 import time
 from pathlib import Path
@@ -20,12 +28,12 @@ import torch.nn as nn
 import copy
 from torch.autograd import Variable
 import numpy as np
-from tqdm import tqdm, trange
+from tqdm import tqdm
 from blue_bc.maddpg import BaseMADDPG
 from SAC.sac import SAC
 from red_bc.heuristic import BlueHeuristic
 
-matplotlib.use('Agg')
+matplotlib.use('TKagg')
 import matplotlib.pylab
 from utils import save_video
 from config_loader import config_loader
@@ -35,7 +43,6 @@ from simulator.load_environment import load_environment
 from diffuser.datasets.multipath import NAgentsIncrementalDataset
 from fugitive_policies.diffusion_policy import DiffusionGlobalPlannerSelHideouts
 from fugitive_policies.diffusion_policy import DiffusionGlobalPlannerSelHideouts, DiffusionStateOnlyGlobalPlanner
-
 
 from enum import Enum, auto
 
@@ -47,32 +54,7 @@ class Estimator(Enum):
     NO_DETECTIONS = auto()
     FLAT_SEQUENCE = auto()
 
-# --- Device selection helper and globals ---
-def _select_device():
-    try:
-        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            return "mps"
-    except Exception:
-        pass
-    if torch.cuda.is_available():
-        return "cuda"
-    return "cpu"
-
-GLOBAL_DEVICE_NAME = _select_device()
-GLOBAL_DEVICE = torch.device(GLOBAL_DEVICE_NAME)
-print(f"[Device] Using {GLOBAL_DEVICE_NAME} (MPS: {getattr(torch.backends, 'mps', None) and torch.backends.mps.is_available()}, CUDA: {torch.cuda.is_available()})")
-
-def to_device(x, device):
-    if isinstance(x, torch.Tensor):
-        return x.to(device)
-    if isinstance(x, np.ndarray):
-        return torch.as_tensor(x, device=device)
-    if isinstance(x, (list, tuple)):
-        return type(x)(to_device(t, device) for t in x)
-    if isinstance(x, dict):
-        return {k: to_device(v, device) for k, v in x.items()}
-    return x
-
+def heuristic_evaluate(bench, bench_env_name, base_dir, episode_num = 100):
     evaluate_config = config_loader(path=base_dir/("parameter_"+bench_env_name)/"parameters_network.yaml")
     env_config = config_loader(path=base_dir/("parameter_"+bench_env_name)/"parameters_env.yaml")
     evaluate_base_dir = str(base_dir/(bench+"_"+bench_env_name))
@@ -106,7 +88,7 @@ def to_device(x, device):
     os.makedirs(evaluate_video_dir, exist_ok=True)
 
     # INFO: Load the environment
-    device = GLOBAL_DEVICE_NAME
+    device = get_device(evaluate_config["environment"]["cuda"])
     epsilon = 0.1
     variation = 0
     print("Loaded environment variation %d with seed %d" % (variation, evaluate_config["environment"]["seed"]))
@@ -139,7 +121,7 @@ def to_device(x, device):
     episodes_timestep = []
     episodes_success = []
     agents_episodes_reward = []
-    for ep in trange(episode_num, desc="Heuristic Eval", unit="ep"):
+    for ep in range(episode_num):
 
         eval_seed = int(ep + 1e6 + 1)
 
@@ -167,7 +149,7 @@ def to_device(x, device):
                 episode_detection = episode_detection + red_detected_by_hs_flag
             if t == env_config["max_timesteps"]:
                 agents_episode_reward = agents_episode_reward - 50
-            if ep % 50 == 0 and (t % 10 == 0):
+            if ep % 50 == 0:
                 game_img = env.render('Policy', show=False, fast=True)
                 imgs.append(game_img)
         print("This episode contains %d steps" % t)
@@ -176,8 +158,7 @@ def to_device(x, device):
         episodes_timestep.append(t)
         episodes_success.append(t<env_config["max_timesteps"])
         agents_episodes_reward.append(agents_episode_reward)
-        if ((ep + 1) % 10 == 0) or (ep + 1 == episode_num):
-            tqdm.write("complete %f of the evaluation" % ((ep + 1) / float(episode_num)))
+        print("complete %f of the testing" % (ep/episode_num))
         if ep % 50 == 0:
             video_path = evaluate_video_dir + (str(ep) + ".mp4")
             save_video(imgs, str(video_path), fps=10)
@@ -204,6 +185,7 @@ def to_device(x, device):
     np.savetxt(reward_std_path, (agents_models_episodes_reward_std))
     return
 
+def red_rl_baseline(bench, bench_env_name, base_dir, episode_num = 100):
     # INFO: load the configurations from the base dir
     config = config_loader(path=base_dir/("parameter_"+bench_env_name)/"parameters_network.yaml")
     env_config = config_loader(path=base_dir/("parameter_"+bench_env_name)/"parameters_env.yaml")
@@ -234,7 +216,7 @@ def to_device(x, device):
     os.makedirs(evaluate_log_dir, exist_ok=True)
     os.makedirs(video_dir, exist_ok=True)
     # INFO: Load the environment
-    device = GLOBAL_DEVICE_NAME
+    device = get_device(config["environment"]["cuda"])
     epsilon = 0.1
     variation = 0
     print("Loaded environment variation %d with seed %d" % (variation, config["environment"]["seed"]))
@@ -286,7 +268,7 @@ def to_device(x, device):
     episodes_timestep = []
     episodes_success = []
     agents_episodes_reward = []
-    for ep in trange(recent_episode, episode_num, desc="DDPG Eval", unit="ep"):
+    for ep in range(recent_episode, episode_num):
 
         eval_seed = int(ep + 1e6 + 1)
 
@@ -298,6 +280,7 @@ def to_device(x, device):
 
         # INFO: Start a new episode
         red_observation, red_partial_observation = env.reset(seed=eval_seed)
+        incremental_dataset = NAgentsIncrementalDataset(env)
 
         # last_two_detections_vel = env.get_t_init_le_timeInterval()
         prisoner_loc = copy.deepcopy(env.get_prisoner_location())
@@ -312,10 +295,9 @@ def to_device(x, device):
             t = t + 1
 
             # INFO: Use maddpg
-            torch_red_observation = [torch.as_tensor(red_observation[i], dtype=torch.float32, device=GLOBAL_DEVICE) for i in range(maddpg.nagents)]
-            with torch.no_grad():
-                torch_agent_actions = maddpg.step(torch_red_observation, explore=False)
-            agent_actions = [ac.detach().cpu().numpy() for ac in torch_agent_actions] 
+            torch_red_observation = [Variable(torch.Tensor(red_observation[i]), requires_grad=False).to(device) for i in range(maddpg.nagents)]
+            torch_agent_actions = maddpg.step(torch_red_observation, explore=False)
+            agent_actions = [ac.data.cpu().numpy() for ac in torch_agent_actions] 
             next_red_observation, rewards, done, i, _, red_detected_by_hs_flag = env.step(split_red_directions_to_direction_speed((np.concatenate(agent_actions))))
             if not done:
                 episode_closest_dist = episode_closest_dist + np.min(np.linalg.norm(np.vstack((*env.get_blue_locations()[0], *env.get_blue_locations()[1])) - np.hstack((env.get_prisoner_location())), axis=-1))
@@ -330,7 +312,7 @@ def to_device(x, device):
             red_observation = next_red_observation
             prisoner_loc = next_prisoner_loc
 
-            if ep % 50 == 0 and (t % 10 == 0):
+            if ep % 50 == 0:
                 # grid = get_probability_grid(env.nonlocalized_trgt_gaussians, np.array(env.prisoner.location))
                 # search_party_locations, helicopter_locations = env.get_blue_locations()
                 # heatmap_img = generate_heatmap_img(grid, sigma=5, true_location=env.prisoner.location, sp_locations=search_party_locations, hc_locations=helicopter_locations, mu_locations=env.nonlocalized_trgt_gaussians[1][0]*2428)
@@ -343,8 +325,7 @@ def to_device(x, device):
         episodes_success.append(t<env_config["max_timesteps"])
         agents_episodes_reward.append(agents_episode_reward)
 
-        if ((ep + 1) % 10 == 0) or (ep + 1 == episode_num):
-            tqdm.write("complete %f of the evaluation" % ((ep + 1) / float(episode_num)))
+        print("complete %f of the testing" % (ep/episode_num))
         if ep % 50 == 0:
             video_path = video_dir / (str(ep) + ".mp4")
             save_video(imgs, str(video_path), fps=10)
@@ -371,6 +352,7 @@ def to_device(x, device):
     np.savetxt(reward_std_path, (agents_models_episodes_reward_std))
     return
 
+def red_rl_baseline_sac_evaluate(bench, bench_env_name, base_dir, episode_num = 100):
     # INFO: load the configurations from the base dir
     config = config_loader(path=base_dir/("parameter_"+bench_env_name)/"parameters_network.yaml")
     env_config = config_loader(path=base_dir/("parameter_"+bench_env_name)/"parameters_env.yaml")
@@ -405,7 +387,7 @@ def to_device(x, device):
     os.makedirs(dataset_dir, exist_ok=True)
 
     # INFO: Load the environment
-    device = GLOBAL_DEVICE_NAME
+    device = get_device(config["environment"]["cuda"])
     epsilon = 0.1
     variation = 0
     print("Loaded environment variation %d with seed %d" % (variation, config["environment"]["seed"]))
@@ -446,12 +428,13 @@ def to_device(x, device):
     episodes_timestep = []
     episodes_success = []
     agents_episodes_reward = []
-    for ep in trange(recent_episode, episode_num, desc="SAC Eval", unit="ep"):
+    for ep in range(recent_episode, episode_num):
 
         eval_seed = int(ep + 1e6 + 1)
 
         # INFO: Start a new episode
         red_observation, red_partial_observation = env.reset(seed=eval_seed)
+        incremental_dataset = NAgentsIncrementalDataset(env)
 
         prisoner_loc = copy.deepcopy(env.get_prisoner_location())
         t = 0
@@ -470,10 +453,9 @@ def to_device(x, device):
             t = t + 1
 
             # INFO: Use sac
-            torch_red_observation = [torch.as_tensor(red_observation[i], dtype=torch.float32, device=GLOBAL_DEVICE) for i in range(agent_num)]
-            with torch.no_grad():
-                torch_agent_actions = sac.select_action(torch_red_observation)
-            agent_actions = [ac.detach().cpu().numpy() for ac in torch_agent_actions] # agent actions for all robots, each element is an array with dimension 5
+            torch_red_observation = [Variable(torch.Tensor(red_observation[i]), requires_grad=False).to(device) for i in range(agent_num)]
+            torch_agent_actions = sac.select_action(torch_red_observation)
+            agent_actions = [ac.data.cpu().numpy() for ac in torch_agent_actions] # agent actions for all robots, each element is an array with dimension 5
             next_red_observation, rewards, done, i, _, red_detected_by_hs_flag = env.step(split_red_directions_to_direction_speed((np.concatenate(agent_actions))))
             if not done:
                 episode_closest_dist = episode_closest_dist + np.min(np.linalg.norm(np.vstack((*env.get_blue_locations()[0], *env.get_blue_locations()[1])) - np.hstack((env.get_prisoner_location())), axis=-1))
@@ -492,7 +474,7 @@ def to_device(x, device):
             closest_dist.append(np.min(np.linalg.norm(np.vstack((*env.get_blue_locations()[0], *env.get_blue_locations()[1])) - np.hstack((env.get_prisoner_location())), axis=-1)))
             prisoner_speeds.append(np.linalg.norm(env.prisoner.step_dist_xy))
 
-            if ep % 50 == 0 and (t % 10 == 0):
+            if ep % 50 == 0:
                 # grid = get_probability_grid(env.nonlocalized_trgt_gaussians, np.array(env.prisoner.location))
                 # search_party_locations, helicopter_locations = env.get_blue_locations()
                 # heatmap_img = generate_heatmap_img(grid, sigma=5, true_location=env.prisoner.location, sp_locations=search_party_locations, hc_locations=helicopter_locations, mu_locations=env.nonlocalized_trgt_gaussians[1][0]*2428)
@@ -505,8 +487,7 @@ def to_device(x, device):
         episodes_success.append(t<env_config["max_timesteps"])
         agents_episodes_reward.append(agents_episode_reward)
 
-        if ((ep + 1) % 10 == 0) or (ep + 1 == episode_num):
-            tqdm.write("complete %f of the evaluation" % ((ep + 1) / float(episode_num)))
+        print("complete %f of the testing" % (ep / episode_num))
         if ep % 50 == 0:
             video_path = video_dir / (str(ep) + ".mp4")
             save_video(imgs, str(video_path), fps=10)
@@ -536,6 +517,7 @@ def to_device(x, device):
     np.savetxt(reward_std_path, (agents_models_episodes_reward_std))
     return
 
+def red_rl_piece_sac_evaluate(bench, bench_env_name, base_dir, episode_num = 100):
     # INFO: load the configurations from the base dir
     config = config_loader(path=base_dir/("parameter_"+bench_env_name)/"parameters_network.yaml")
     env_config = config_loader(path=base_dir/("parameter_"+bench_env_name)/"parameters_env.yaml")
@@ -570,7 +552,7 @@ def to_device(x, device):
     os.makedirs(dataset_dir, exist_ok=True)
 
     # INFO: Load the environment
-    device = GLOBAL_DEVICE_NAME
+    device = get_device(config["environment"]["cuda"])
     epsilon = 0.1
     variation = 0
     print("Loaded environment variation %d with seed %d" % (variation, config["environment"]["seed"]))
@@ -622,7 +604,7 @@ def to_device(x, device):
     episodes_timestep = []
     episodes_success = []
     agents_episodes_reward = []
-    for ep in trange(recent_episode, episode_num, desc="Diffusion+SAC Eval", unit="ep"):
+    for ep in range(recent_episode, episode_num):
         eval_seed = int(ep + 1e6 + 1)
 
         env.set_dist_coeff(-1, -1, 0)
@@ -631,6 +613,7 @@ def to_device(x, device):
         np.random.seed(eval_seed)
         random.seed(eval_seed)
         red_observation, red_partial_observation = env.reset(seed=eval_seed, reset_type=None, red_policy=red_policy, waypt_seed=eval_seed)
+        incremental_dataset = NAgentsIncrementalDataset(env)
 
         # last_two_detections_vel = env.get_t_init_le_timeInterval()
         prisoner_loc = copy.deepcopy(env.get_prisoner_location())
@@ -651,17 +634,13 @@ def to_device(x, device):
             t = t + 1
 
             # INFO: Use diffusion
-            torch_red_observation = [torch.as_tensor(red_observation[i], dtype=torch.float32, device=GLOBAL_DEVICE) for i in range(agent_num)]
+            torch_red_observation = [Variable(torch.Tensor(red_observation[i]), requires_grad=False).to(device) for i in range(agent_num)]
             if bench == "Diffusion":
                 to_waypt_vec_normalized = torch_red_observation[0][-3:-1] / (torch.linalg.norm(torch_red_observation[0][-3:-1]) + 1e-3)
                 torch_agent_actions = [to_waypt_vec_normalized]
             else:
-                with torch.no_grad():
-                    torch_agent_actions = sac.select_action(torch_red_observation)
-            if bench == "Diffusion":
-                agent_actions = [ac.detach().cpu().numpy() if hasattr(ac, 'detach') else ac.cpu().numpy() for ac in torch_agent_actions]
-            else:
-                agent_actions = [ac.detach().cpu().numpy() for ac in torch_agent_actions]
+                torch_agent_actions = sac.select_action(torch_red_observation)
+            agent_actions = [ac.data.cpu().numpy() for ac in torch_agent_actions] # agent actions for all robots, each element is an array with dimension 5
             next_red_observation, rewards, done, i, _, red_detected_by_hs_flag = env.step(split_red_directions_to_direction_speed((np.concatenate(agent_actions))))
             if not done:
                 episode_closest_dist = episode_closest_dist + np.min(np.linalg.norm(np.vstack((*env.get_blue_locations()[0], *env.get_blue_locations()[1])) - np.hstack((env.get_prisoner_location())), axis=-1))
@@ -682,7 +661,7 @@ def to_device(x, device):
             prisoner_speeds.append(np.linalg.norm(env.prisoner.step_dist_xy))
             closest_dist.append(np.min(np.linalg.norm(np.vstack((*env.get_blue_locations()[0], *env.get_blue_locations()[1])) - np.hstack((env.get_prisoner_location())), axis=-1)))
 
-            if ep % 50 == 0 and (t % 10 == 0):
+            if ep % 50 == 0:
                 # grid = get_probability_grid(env.nonlocalized_trgt_gaussians, np.array(env.prisoner.location))
                 # search_party_locations, helicopter_locations = env.get_blue_locations()
                 # heatmap_img = generate_heatmap_img(grid, sigma=5, true_location=env.prisoner.location, sp_locations=search_party_locations, hc_locations=helicopter_locations, mu_locations=env.nonlocalized_trgt_gaussians[1][0]*2428)
@@ -695,8 +674,7 @@ def to_device(x, device):
         episodes_success.append(t<env_config["max_timesteps"])
         agents_episodes_reward.append(agents_episode_reward)
 
-        if ((ep + 1) % 10 == 0) or (ep + 1 == episode_num):
-            tqdm.write("complete %f of the evaluation" % ((ep + 1) / float(episode_num)))
+        print("complete %f of the training" % (ep/episode_num))
         if ep % 50 == 0:
             video_path = video_dir / (str(ep) + ".mp4")
             save_video(imgs, str(video_path), fps=10)
@@ -711,193 +689,6 @@ def to_device(x, device):
     models_episodes_successRate_std.append(np.array(episodes_success).std(axis=0))
     agents_models_episodes_reward.append(np.array(agents_episodes_reward).mean(axis=0))
     agents_models_episodes_reward_std.append(np.array(agents_episodes_reward).std(axis=0))
-    # INFO: save the mean and std into files
-    np.savetxt(detection_rate_path, (episodes_detection))
-    np.savetxt(detection_rate_std_path, (models_episodes_detection_rate_std))
-    np.savetxt(closest_dist_path, (episodes_closest_dist))
-    np.savetxt(closest_dist_std_path, (models_episodes_closest_dist_std))
-    np.savetxt(timestep_path, (episodes_timestep))
-    np.savetxt(timestep_std_path, (models_episodes_timestep_std))
-    np.savetxt(successRate_path, (episodes_success))
-    np.savetxt(successRate_std_path, (models_episodes_successRate_std))
-    np.savetxt(reward_path, (agents_episodes_reward))
-    np.savetxt(reward_std_path, (agents_models_episodes_reward_std))
-    return
-
-def red_rl_piece_sac_evaluate(bench, bench_env_name, base_dir: Path, episode_num: int = 100):
-    """Evaluate Diffusion-only and Diffusion+SAC policies on Apple Metal (MPS/CPU/CUDA-agnostic).
-    Writes metrics and optional videos to <base_dir>/<bench>_<bench_env_name>/*.
-    """
-    # INFO: load the configurations from the base dir
-    config = config_loader(path=base_dir/("parameter_"+bench_env_name)/"parameters_network.yaml")
-    env_config = config_loader(path=base_dir/("parameter_"+bench_env_name)/"parameters_env.yaml")
-
-    models_episodes_detection_rate = []
-    models_episodes_detection_rate_std = []
-    models_episodes_closest_dist = []
-    models_episodes_closest_dist_std = []
-    models_episodes_timestep = []
-    models_episodes_timestep_std = []
-    models_episodes_successRate = []
-    models_episodes_successRate_std = []
-    agents_models_episodes_reward = []
-    agents_models_episodes_reward_std = []
-
-    # INFO: set up file and folder structure
-    evaluate_log_dir = str(base_dir / (bench+"_"+bench_env_name) / "log")
-    model_dir = base_dir / ("model_"+bench_env_name)
-    video_dir = base_dir / (bench+"_"+bench_env_name) / "video"
-    dataset_dir = base_dir / (bench+"_"+bench_env_name) / "data"
-    detection_rate_path = evaluate_log_dir + "/detections.txt"
-    detection_rate_std_path = evaluate_log_dir + "/detections_std.txt"
-    closest_dist_path = evaluate_log_dir + "/closest_dist.txt"
-    closest_dist_std_path = evaluate_log_dir + "/closest_dist_std.txt"
-    timestep_path = evaluate_log_dir + "/time.txt"
-    timestep_std_path = evaluate_log_dir + "/time_std.txt"
-    successRate_path = evaluate_log_dir + "/success.txt"
-    successRate_std_path = evaluate_log_dir + "/success_std.txt"
-    reward_path = evaluate_log_dir + "/scores.txt"
-    reward_std_path = evaluate_log_dir + "/scores_std.txt"
-    os.makedirs(evaluate_log_dir, exist_ok=True)
-    os.makedirs(video_dir, exist_ok=True)
-    os.makedirs(dataset_dir, exist_ok=True)
-
-    # INFO: Load the environment
-    device = GLOBAL_DEVICE_NAME
-    epsilon = 0.1
-    variation = 0
-    print("Loaded environment variation %d with seed %d" % (variation, config["environment"]["seed"]))
-    # set seeds
-    np.random.seed(config["environment"]["seed"])
-    random.seed(config["environment"]["seed"])
-    env = load_environment(env_config)
-    env.gnn_agent_last_detect = config["environment"]["gnn_agent_last_detect"]
-
-    blue_policy = BlueHeuristic(env, debug=False)
-
-    # INFO: diffusion only vs diffusion + sel
-    if "Sel" not in bench:
-        diffusion_path = model_dir / "diffusion.pth"
-        red_policy = DiffusionStateOnlyGlobalPlanner(env, diffusion_path, plot=False, traj_grader_path=None, sel=False)
-    else:
-        diffusion_path = model_dir / "diffusion.pth"
-        costmap_path = model_dir / "costmap.npz"
-        red_policy = DiffusionStateOnlyGlobalPlanner(
-            env,
-            diffusion_path,
-            plot=False,
-            traj_grader_path=None,
-            costmap=np.load(costmap_path)["costmap"],
-            res=np.load(costmap_path)["res"],
-            sel=True,
-        )
-
-    env = PrisonerRedEnv(env, blue_policy)
-
-    # INFO: Reset the environment
-    red_observation, red_partial_observation = env.reset(seed=None, reset_type=None, red_policy=red_policy)
-    prisoner_loc = copy.deepcopy(env.get_prisoner_location())
-
-    # INFO: Load the SAC model (for Diffusion_RL)
-    agent_num = 1
-    action_dim_per_agent = 2 + env_config["comm_dim"]
-    obs_dims=[red_observation[i].shape[0] for i in range(agent_num)]
-    ac_dims=[action_dim_per_agent for i in range(agent_num)]
-    loc_dims = [len(prisoner_loc) for i in range(agent_num)]
-    obs_ac_dims = [obs_dims, ac_dims]
-    sac = SAC(
-        num_in_pol = red_observation[0].shape[0],
-        num_out_pol = action_dim_per_agent,
-        num_in_critic = (red_observation[0].shape[0] + action_dim_per_agent) * agent_num,
-        discrete_action = False,
-        gamma=config["train"]["gamma"], tau=config["train"]["tau"], critic_lr=config["train"]["critic_lr"], policy_lr=config["train"]["policy_lr"],  entropy_lr=config["train"]["entropy_lr"],
-        hidden_dim=config["train"]["hidden_dim"], policy_type=config["train"]["policy_type"], device=device, constrained=False)
-    sac.init_from_save(model_dir / "model.pth")
-    recent_episode = 0
-
-    episodes_detection = []
-    episodes_closest_dist = []
-    episodes_timestep = []
-    episodes_success = []
-    agents_episodes_reward = []
-
-    for ep in trange(recent_episode, episode_num, desc="Diffusion+SAC Eval", unit="ep"):
-        eval_seed = int(ep + 1e6 + 1)
-        env.set_dist_coeff(-1, -1, 0)
-
-        # INFO: set seeds for numpy and environment as the episode num
-        np.random.seed(eval_seed)
-        random.seed(eval_seed)
-        red_observation, red_partial_observation = env.reset(seed=eval_seed, reset_type=None, red_policy=red_policy, waypt_seed=eval_seed)
-
-        prisoner_loc = copy.deepcopy(env.get_prisoner_location())
-        t = 0
-        imgs = []
-        done = False
-        episode_detection = np.array([0])
-        episode_closest_dist = np.array([0])
-        agents_episode_reward = np.zeros(agent_num)
-
-        while not done:
-            t += 1
-            torch_red_observation = [torch.as_tensor(red_observation[i], dtype=torch.float32, device=GLOBAL_DEVICE) for i in range(agent_num)]
-            if bench == "Diffusion":
-                to_waypt_vec_normalized = torch_red_observation[0][-3:-1] / (torch.linalg.norm(torch_red_observation[0][-3:-1]) + 1e-3)
-                torch_agent_actions = [to_waypt_vec_normalized]
-            else:
-                with torch.no_grad():
-                    torch_agent_actions = sac.select_action(torch_red_observation)
-            if bench == "Diffusion":
-                agent_actions = [ac.detach().cpu().numpy() if hasattr(ac, 'detach') else ac.cpu().numpy() for ac in torch_agent_actions]
-            else:
-                agent_actions = [ac.detach().cpu().numpy() for ac in torch_agent_actions]
-
-            next_red_observation, rewards, done, i, _, red_detected_by_hs_flag = env.step(
-                split_red_directions_to_direction_speed((np.concatenate(agent_actions)))
-            )
-
-            if not done:
-                episode_closest_dist = episode_closest_dist + np.min(
-                    np.linalg.norm(
-                        np.vstack((*env.get_blue_locations()[0], *env.get_blue_locations()[1])) - np.hstack((env.get_prisoner_location())),
-                        axis=-1,
-                    )
-                )
-                agents_episode_reward = agents_episode_reward + env.get_eval_score()
-                episode_detection = episode_detection + red_detected_by_hs_flag
-            if t == env_config["max_timesteps"]:
-                agents_episode_reward = agents_episode_reward - 50
-
-            red_observation = next_red_observation
-
-            if ep % 50 == 0 and (t % 10 == 0):
-                game_img = env.render('Policy', show=False, fast=True)
-                imgs.append(game_img)
-
-        episodes_detection.append(episode_detection)
-        episodes_closest_dist.append(episode_closest_dist / t)
-        episodes_timestep.append(t)
-        episodes_success.append(t < env_config["max_timesteps"])
-        agents_episodes_reward.append(agents_episode_reward)
-
-        if ((ep + 1) % 10 == 0) or (ep + 1 == episode_num):
-            tqdm.write("complete %f of the evaluation" % ((ep + 1) / float(episode_num)))
-        if ep % 50 == 0:
-            video_path = video_dir / (str(ep) + ".mp4")
-            save_video(imgs, str(video_path), fps=10)
-
-    # INFO: these are the final mean and std (across all episodes)
-    models_episodes_detection_rate.append(np.array(episodes_detection).mean(axis=0))
-    models_episodes_detection_rate_std.append(np.array(episodes_detection).std(axis=0))
-    models_episodes_closest_dist.append(np.array(episodes_closest_dist).mean(axis=0))
-    models_episodes_closest_dist_std.append(np.array(episodes_closest_dist).std(axis=0))
-    models_episodes_timestep.append(np.array(episodes_timestep).mean(axis=0))
-    models_episodes_timestep_std.append(np.array(episodes_timestep).std(axis=0))
-    models_episodes_successRate.append(np.array(episodes_success).mean(axis=0))
-    models_episodes_successRate_std.append(np.array(episodes_success).std(axis=0))
-    agents_models_episodes_reward.append(np.array(agents_episodes_reward).mean(axis=0))
-    agents_models_episodes_reward_std.append(np.array(agents_episodes_reward).std(axis=0))
-
     # INFO: save the mean and std into files
     np.savetxt(detection_rate_path, (episodes_detection))
     np.savetxt(detection_rate_std_path, (models_episodes_detection_rate_std))
@@ -954,4 +745,3 @@ if __name__ == '__main__':
             red_rl_piece_sac_evaluate(bench, bench_env_name, base_dir=Path(benchmark_folder[bench]), episode_num = 100)                                            
         else:
             raise NotImplementedError
-

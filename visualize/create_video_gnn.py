@@ -18,6 +18,8 @@ from simulator import PrisonerBothEnv, PrisonerBlueEnv, PrisonerEnv
 from simulator.gnn_wrapper import PrisonerGNNEnv
 from blue_policies.heuristic import BlueHeuristic
 
+
+
 def get_probability_grid(nn_output, true_location=None):
     pi, mu, sigma = nn_output
     pi = pi.detach().cpu().numpy()
