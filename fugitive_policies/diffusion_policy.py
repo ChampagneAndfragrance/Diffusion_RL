@@ -29,19 +29,9 @@ def to_cpu_numpy(x):
     return _np.asarray(x)
 
 
-def _select_device():
-    try:
-        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            return "mps"
-    except Exception:
-        pass
-    if torch.cuda.is_available():
-        return "cuda"
-    return "cpu"
+from utils.device import global_device, global_device_name, to_device, print_device
+print_device()
 
-global_device_name = _select_device()
-global_device = torch.device(global_device_name)
-print(f"[Device] Using {global_device_name} (MPS: {getattr(torch.backends, 'mps', None) and torch.backends.mps.is_available()}, CUDA: {torch.cuda.is_available()})")
 
 def cycle(dl):
     while True:
@@ -874,7 +864,7 @@ class DiffusionGlobalPlannerHideout(DiffusionGlobalPlanner):
     def update_raw_red_downsampled_traj(self, new_red_downsampled_traj):
         red_loc = (
             (
-                torch.Tensor(self.env.prisoner.location).to(global_device_name)
+                torch.Tensor(self.env.prisoner.location).to(global_device)
                 / self.env.dim_x
             )
             * 2

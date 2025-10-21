@@ -14,22 +14,8 @@ from diffuser.datasets.prisoner import (
 )
 
 
-def _select_device():
-    try:
-        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            return "mps"
-    except Exception:
-        pass
-    if torch.cuda.is_available():
-        return "cuda"
-    return "cpu"
-
-
-global_device_name = _select_device()
-global_device = torch.device(global_device_name)
-print(
-    f"[Device] Using {global_device_name} (MPS available: {getattr(torch.backends, 'mps', None) and torch.backends.mps.is_available()}, CUDA available: {torch.cuda.is_available()})"
-)
+from utils.device import global_device, global_device_name, to_device, print_device
+print_device()
 
 
 class StateOnlyDataset(torch.utils.data.Dataset):
@@ -289,8 +275,8 @@ class StateOnlyDataset(torch.utils.data.Dataset):
 
         # Pass this to condition our models rather than pass them separately
         global_dict = {
-            "hideouts": global_cond.to(global_device_name),
-            "red_start": torch.Tensor(prisoner_at_start).to(global_device_name),
+            "hideouts": global_cond.to(global_device),
+            "red_start": torch.Tensor(prisoner_at_start).to(global_device),
         }
 
         return path, global_dict, local_cond
@@ -305,9 +291,9 @@ class StateOnlyDataset(torch.utils.data.Dataset):
 
         # INFO: This is for red traj only
         global_dict = {
-            "hideouts": global_cond.to(global_device_name),
+            "hideouts": global_cond.to(global_device),
             "red_start": torch.Tensor(prisoner_at_start)
-            .to(global_device_name)
+            .to(global_device)
             .repeat_interleave(repeats=num_samples, dim=0),
         }
 
@@ -1095,9 +1081,9 @@ def pad_collate_detections(batch):
 
     # Pass this to condition our models rather than pass them separately
     global_dict = {
-        "hideouts": global_cond.to(global_device_name),
-        "detections": detections.to(global_device_name),
-        "red_start": torch.Tensor(prisoner_at_start).to(global_device_name),
+        "hideouts": global_cond.to(global_device),
+        "detections": detections.to(global_device),
+        "red_start": torch.Tensor(prisoner_at_start).to(global_device),
     }
 
     return data, global_dict, conditions
@@ -1131,10 +1117,10 @@ def pad_collate_detections_multiHideout(batch, num_samples):
 
     # Pass this to condition our models rather than pass them separately
     global_dict = {
-        "hideouts": global_cond.to(global_device_name),
-        # "unpacked": torch.cat(all_detections, axis=0).to(global_device_name),
+        "hideouts": global_cond.to(global_device),
+        # "unpacked": torch.cat(all_detections, axis=0).to(global_device),
         "red_start": torch.Tensor(prisoner_at_start)
-        .to(global_device_name)
+        .to(global_device)
         .repeat_interleave(repeats=num_samples, dim=0),
     }
     # global_dict = {"hideouts": global_cond, "detections": detections}
@@ -1181,9 +1167,9 @@ def pad_collate_detections_selHideout(batch, num_samples_each_hideout):
     prisoner_at_start = torch.tensor(np.stack(prisoner_at_start, axis=0))
 
     global_dict = {
-        "hideouts": global_cond.to(global_device_name),
-        # "red_start": torch.Tensor(prisoner_at_start).to(global_device_name).repeat_interleave(repeats=samples_num, dim=0)
-        "red_start": prisoner_at_start.to(global_device_name).repeat((samples_num, 1)),
+        "hideouts": global_cond.to(global_device),
+        # "red_start": torch.Tensor(prisoner_at_start).to(global_device).repeat_interleave(repeats=samples_num, dim=0)
+        "red_start": prisoner_at_start.to(global_device).repeat((samples_num, 1)),
     }
 
     return data, global_dict, conditions
@@ -1211,9 +1197,9 @@ def pad_collate_detections_repeat(batch, num_samples):
     # global_dict = {"hideouts": global_cond, "detections": detections, "unpacked": torch.cat(all_detections, axis=0), "red_start": torch.Tensor(prisoner_at_start).repeat_interleave(repeats=num_samples, dim=0)}
     # INFO: This is for red traj only
     global_dict = {
-        "hideouts": global_cond.to(global_device_name),
+        "hideouts": global_cond.to(global_device),
         "red_start": torch.Tensor(prisoner_at_start)
-        .to(global_device_name)
+        .to(global_device)
         .repeat_interleave(repeats=num_samples, dim=0),
     }
 
@@ -1368,14 +1354,14 @@ def pad_loc_reward(batch, gamma, period):
     step_loc, step_rew, _, _, _ = zip(*batch)
 
     batches_seqLen_agentLocations = torch.Tensor(np.stack(step_loc, axis=0)).to(
-        global_device_name
+        global_device
     )
     red_rews = torch.Tensor(np.stack(step_rew, axis=0)).squeeze()
     seq_len = batches_seqLen_agentLocations.shape[1]
     discount_factors = torch.Tensor([gamma**i for i in range(seq_len)])
     batches_seqLen_redRews = torch.sum(
         red_rews * discount_factors, axis=-1, keepdim=True
-    ).to(global_device_name)
+    ).to(global_device)
 
     return batches_seqLen_agentLocations[:, ::period, :2], batches_seqLen_redRews
 
@@ -1383,10 +1369,10 @@ def pad_loc_reward(batch, gamma, period):
 def pad_loc(batch):
     step_loc, step_rew, hideout, condition, prisoner_at_start = zip(*batch)
     batches_seqLen_agentLocations = torch.Tensor(np.stack(step_loc, axis=0)).to(
-        global_device_name
+        global_device
     )
-    hideout = torch.stack(hideout, dim=0).to(global_device_name)
-    prisoner_at_start = torch.stack(prisoner_at_start, dim=0).to(global_device_name)
+    hideout = torch.stack(hideout, dim=0).to(global_device)
+    prisoner_at_start = torch.stack(prisoner_at_start, dim=0).to(global_device)
     # INFO: construct the global condition
     global_dict = {"hideouts": hideout, "red_start": prisoner_at_start}
     return batches_seqLen_agentLocations[:, :, :2], global_dict, condition
@@ -1400,10 +1386,10 @@ def update_raw_traj(
     perception_min_thresh=0.05,
 ):
     raw_red_downsampled_traj = copy.deepcopy(raw_red_downsampled_traj)
-    repulse_vec = torch.zeros_like(raw_red_downsampled_traj).to(global_device_name)
+    repulse_vec = torch.zeros_like(raw_red_downsampled_traj).to(global_device)
     for detects in detected_blue_states:
-        detect_loc = torch.Tensor([detects[0]]).to(global_device_name)
-        detect_vel = torch.Tensor(detects[1]).to(global_device_name)
+        detect_loc = torch.Tensor([detects[0]]).to(global_device)
+        detect_vel = torch.Tensor(detects[1]).to(global_device)
 
         blue_to_pt = raw_red_downsampled_traj - detect_loc
         dist_from_blue_to_pt = torch.norm(blue_to_pt, dim=-1, keepdim=True)
@@ -1471,7 +1457,8 @@ if __name__ == "__main__":
 
     def cycle(dl):
         while True:
-            generate_path_samples
+            for item in dl:
+                yield item
 
     train_batch_size = 32
     dataloader = torch.utils.data.DataLoader(

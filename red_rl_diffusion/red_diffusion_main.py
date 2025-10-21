@@ -22,25 +22,8 @@ import argparse
 import random
 import time
 
-def _select_device():
-    try:
-        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            return "mps"
-    except Exception:
-        pass
-    if torch.cuda.is_available():
-        return "cuda"
-    return "cpu"
-
-def to_device(x, device):
-    if torch.is_tensor(x): return x.to(device)
-    if isinstance(x, (list, tuple)): return type(x)(to_device(t, device) for t in x)
-    if isinstance(x, dict): return {k: to_device(v, device) for k, v in x.items()}
-    return x
-
-global_device_name = _select_device()
-global_device = torch.device(global_device_name)
-print(f"[Device] Using {global_device_name} (MPS available: {getattr(torch.backends, 'mps', None) and torch.backends.mps.is_available()}, CUDA available: {torch.cuda.is_available()})")
+from utils.device import global_device, global_device_name, to_device, print_device
+print_device()
 
 
 mse_loss_func = torch.nn.MSELoss()
