@@ -1,3 +1,11 @@
+"""
+blue_bc.buffer
+-------------
+Replay buffers and simple buffer utilities used by blue-team training
+scripts. The primary export is `ReplayBuffer`, a lightweight container
+for storing agent observations and actions for multi-agent replay.
+"""
+
 import enum
 import os
 import numpy as np

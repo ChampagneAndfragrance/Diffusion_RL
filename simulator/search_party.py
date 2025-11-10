@@ -1,3 +1,11 @@
+"""
+simulator.search_party
+----------------------
+Search party agent implementation. SearchParty is a ground-based searching
+unit that moves using the shared movement primitives and exposes the same
+DetectionObject interface as other sensing agents.
+"""
+
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -6,6 +14,7 @@ from simulator.terrain import TerrainType
 from .utils import clip_theta, distance, pick_closer_theta
 import simulator.fugitive
 from simulator.camera import Camera
+
 
 class SearchParty(MovingObject, DetectionObject):
     def __init__(self, terrain, location, speed, detection_object_type_coefficient):

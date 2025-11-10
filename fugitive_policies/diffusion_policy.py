@@ -418,6 +418,15 @@ def to_np(x):
 
 
 class DiffusionGlobalPlanner(object):
+    """A diffusion-model-based global planner.
+
+    This class wraps a diffusion model (and optionally an EMA model) to produce
+    candidate waypoint trajectories and convert them into low-level actions
+    (speed, heading) for the fugitive agent. It provides utility methods to
+    sample trajectories, normalize/unnormalize coordinates, and convert paths
+    into simulator actions.
+    """
+
     def __init__(
         self, env, diffusion, ema, max_speed, plot, plot_traj_num=None
     ) -> None:
@@ -432,11 +441,25 @@ class DiffusionGlobalPlanner(object):
         self.plot_traj_num = plot_traj_num
 
     def predict(self, observation, deterministic=True):
+        """Return the next desired low-level action for the current observation.
+
+        Args:
+            observation: environment observation (unused in this base wrapper).
+            deterministic (bool): whether to deterministically select actions.
+
+        Returns:
+            tuple: (action, None) where action is a single [speed, theta] array.
+        """
         return (self.get_desired_action(observation), None)
 
     def get_desired_action(self, observation):
-        # self.observations.process_observation(observation)
+        """Return the next low-level action derived from the diffusion samples.
 
+        The planner lazily generates a set of waypoint trajectories using the
+        diffusion model and pops actions one-by-one from the internal action
+        queue until depleted.
+        """
+        # self.observations.process_observation(observation)
         desired_action = self.generate_path_samples()
         # desired_action = self.action_to_random_hideout()
         # import time
@@ -446,6 +469,17 @@ class DiffusionGlobalPlanner(object):
     def generate_path_samples(self, n_samples=10, plot=True):
         """
         generate samples from (ema) diffusion model
+        """
+        """Generate waypoint samples from the diffusion model and convert one
+        sample to a sequence of low-level actions.
+
+        Args:
+            n_samples (int): number of trajectory samples to draw from the model.
+            plot (bool): whether to plot sampled trajectories (side effect).
+
+        Returns:
+            np.ndarray: a single low-level action [speed, theta] popped from the
+                planner's internal action queue.
         """
         if len(self.actions) == 0:
             start_loc = (
@@ -489,6 +523,13 @@ class DiffusionGlobalPlanner(object):
     def construct_conditions(
         self, normalized_start_loc, unnormalized_hideout_locs, n_samples
     ):
+        """Build conditioning structure used by the diffusion model.
+
+        The diffusion models in this project expect a `global_cond` structure
+        and a sequence of `conditions`. This helper converts start/hideout
+        information into that expected format, randomly sampling hideouts
+        when appropriate.
+        """
         hideoutID_hideoutLoc = unnormalized_hideout_locs.view(-1, 2).clone()
         normalized_hideout_locs = self.normalize(hideoutID_hideoutLoc)
         # INFO: conditioned on random hideout
@@ -509,9 +550,12 @@ class DiffusionGlobalPlanner(object):
         return conditions
 
     def convert_path_to_actions(self, path):
-        """Converts list of points on path to list of actions (speed, thetas)
-        This function accounts for the fact that our simulator rounds actions to
-        fit on the grid map.
+        """Convert a discretized path (sequence of grid points) into low-level
+        simulator actions.
+
+        Returns a list of [speed, theta] actions that step the agent along
+        the provided path. This respects the planner's configured max speed
+        and compensates for grid rounding.
         """
         actions = []
         currentpos = path[0]
@@ -522,6 +566,15 @@ class DiffusionGlobalPlanner(object):
         return actions
 
     def convert_traj_to_action(self, curr_loc, next_loc):
+        """Single-step conversion from two coordinates to an action.
+
+        Args:
+            curr_loc (array-like): current [x,y] coordinate.
+            next_loc (array-like): next [x,y] coordinate.
+
+        Returns:
+            numpy.ndarray: [speed, theta] action.
+        """
         dist = np.linalg.norm(np.asarray(curr_loc) - np.asarray(next_loc))
         speed = min(dist, self.max_speed)
         theta = np.arctan2(next_loc[1] - curr_loc[1], next_loc[0] - curr_loc[0])
@@ -529,9 +582,11 @@ class DiffusionGlobalPlanner(object):
         return action
 
     def get_actions_between_two_points(self, startpos, endpos):
-        """Returns list of actions (speed, thetas) to traverse between two points.
-        This function accounts for the fact that our simulator rounds actions to
-        fit on the grid map.
+        """Return a list of low-level actions to move from startpos to endpos.
+
+        This decomposes the straight-line segment between the two discrete
+        grid coordinates into repeated simulator actions that respect the
+        planner's max speed and grid rounding behavior.
         """
         currentpos = startpos
         actions = []
@@ -563,6 +618,12 @@ class DiffusionGlobalPlanner(object):
         return actions
 
     def simulate_action(self, start_location, action):
+        """Apply a low-level action to a discrete start location and return the next location.
+
+        This function mirrors the simulator's movement discretization logic
+        and is used internally to translate waypoint paths into action
+        sequences that the environment can execute.
+        """
         direction = np.array([np.cos(action[1]), np.sin(action[1])])
         speed = action[0]
         new_location = np.round(start_location + direction * speed)
@@ -572,6 +633,14 @@ class DiffusionGlobalPlanner(object):
         return new_location
 
     def unnormalize(self, sample):
+        """Map normalized [-1,1] coordinates back to environment grid coordinates.
+
+        Args:
+            sample: numpy array or torch tensor in normalized coordinate frame.
+
+        Returns:
+            same-shaped array in absolute environment coordinates (0..dim).
+        """
         sample = copy.deepcopy(sample)
 
         # Ensure CPU NumPy before doing NumPy ops
@@ -586,6 +655,14 @@ class DiffusionGlobalPlanner(object):
         return sample
 
     def normalize(self, arr):
+        """Normalize absolute coordinates to the model's [-1, 1] input range.
+
+        Args:
+            arr: array-like of [x,y] coordinates in environment units.
+
+        Returns:
+            The normalized array in-place (also returned).
+        """
         x = arr[..., 0]
         arr[..., 0] = ((x - self.min_x) / (self.max_x - self.min_x)) * 2 - 1
 
@@ -595,6 +672,13 @@ class DiffusionGlobalPlanner(object):
 
 
 class DiffusionStateOnlyGlobalPlanner(object):
+    """Planner that uses a pre-trained diffusion model to create state-only trajectories.
+
+    This class loads a saved diffusion model checkpoint, constructs the
+    required conditioning from the environment, and provides sampling
+    methods (`get_scaled_path`, `generate_path_samples`) that return
+    waypoint trajectories and converted low-level actions for the fugitive.
+    """
     def __init__(
         self,
         env,
@@ -618,6 +702,15 @@ class DiffusionStateOnlyGlobalPlanner(object):
         except Exception:
             pass
 
+        """Load diffusion model checkpoint and prepare device mappings.
+
+        Args:
+            env: environment instance used for conditioning.
+            diffusion_path (str): path to saved diffusion checkpoint.
+            plot (bool): whether to enable plotting in sampling helpers.
+            traj_grader_path (str|None): optional path to a trajectory scorer.
+            costmap, res, sel: optional planning helpers for selection.
+        """
         self.model = torch.load(diffusion_path, map_location="cpu", weights_only=False)
 
         _target_device = (
@@ -643,6 +736,19 @@ class DiffusionStateOnlyGlobalPlanner(object):
             self.traj_grader = None
 
     def get_scaled_path(self, seed=None, hideout_division=None):
+        """Sample trajectories from the diffusion model and return scaled paths.
+
+        The method repeatedly draws samples conditioned on the environment
+        until a valid (non-colliding) path is found, using optional costmap
+        selection and an optional trajectory grader.
+
+        Args:
+            seed (int|None): RNG seed for reproducible sampling.
+            hideout_division: optional selection mask for hideouts.
+
+        Returns:
+            list: sampled trajectory (list of waypoints) in absolute coords.
+        """
         valid_path = False
 
         # INFO: process the current red observation
@@ -777,7 +883,15 @@ class DiffusionStateOnlyGlobalPlanner(object):
         return sample.tolist()
 
     def interpolate_paths(self, paths, total_dense_path_num):
-        
+        """Interpolate a batch of waypoint paths to a denser, fixed-length curve.
+
+        Args:
+            paths (array): batch of shape [B, waypt_num, coords].
+            total_dense_path_num (int): desired output length for each path.
+
+        Returns:
+            np.ndarray: interpolated paths of shape [B, total_dense_path_num, coords].
+        """
         
         if torch.is_tensor(paths):
             paths = paths.detach().cpu().numpy()

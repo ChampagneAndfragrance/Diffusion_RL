@@ -1,3 +1,14 @@
+"""
+simulator.fugitive
+-------------------
+Fugitive agent implementation. The Fugitive combines detection and
+movement behaviors and provides a specialized `detect` implementation for
+different sensor types.
+
+It inherits from `DetectionObject` and `MovingObject` so it can both sense
+and move within the terrain.
+"""
+
 from simulator.abstract_object import MovingObject, DetectionObject
 from simulator.terrain import TerrainType
 import simulator.helicopter

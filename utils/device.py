@@ -57,3 +57,32 @@ def to_device(x: Any, device=None) -> Any:
 
 def print_device():
     print(f"[Device] Using {global_device_name} (MPS available: {getattr(torch.backends, 'mps', None) and getattr(torch.backends, 'mps', None).is_available() if hasattr(torch.backends, 'mps') else False}, CUDA available: {torch.cuda.is_available()})")
+
+
+def safe_torch_load(path: str, **kwargs):
+    """Load a torch checkpoint robustly across CUDA/MPS/CPU environments.
+
+    This will attempt to map the storages to the best available device in this order:
+      1. CUDA (if available)
+      2. MPS (Apple Metal, if available)
+      3. CPU
+
+    If the caller passed explicit `map_location` in kwargs, that is honored.
+    On failure it will fall back to CPU mapping.
+    """
+    # honor explicit map_location if caller provided one
+    if 'map_location' in kwargs:
+        return torch.load(path, **kwargs)
+
+    # prefer CUDA, then MPS, then CPU
+    try:
+        if torch.cuda.is_available():
+            target = torch.device('cuda')
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            target = torch.device('mps')
+        else:
+            target = torch.device('cpu')
+        return torch.load(path, map_location=target, **kwargs)
+    except Exception:
+        # final fallback to CPU
+        return torch.load(path, map_location=torch.device('cpu'), **kwargs)

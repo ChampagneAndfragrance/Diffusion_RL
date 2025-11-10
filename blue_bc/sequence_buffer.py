@@ -1,3 +1,11 @@
+"""
+blue_bc.sequence_buffer
+-----------------------
+Sequence-aware replay buffer implementation used for training recurrent or
+sequence-based models (LSTM/GNN). Stores per-timestep agent observations,
+actions and auxiliary filter/hideout buffers.
+"""
+
 import enum
 import os
 import numpy as np

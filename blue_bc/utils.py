@@ -1,3 +1,11 @@
+"""
+blue_bc.utils
+-------------
+Utility helpers and small dataset/struct definitions used by blue team
+experiments and baselines. This module intentionally keeps generic helpers
+and lightweight data structs to avoid circular imports in the package.
+"""
+
 import yaml
 import argparse
 import torch

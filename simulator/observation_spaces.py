@@ -1,3 +1,14 @@
+"""
+simulator.observation_spaces
+----------------------------
+Helpers to construct observation spaces and named observation accessors.
+
+This module exposes factory functions that build numpy/gym observation
+vectors for different perspectives (fugitive, blue team, ground truth,
+prediction) and a small helper class `ObservationNames` for indexing named
+sections of a flattened observation vector.
+"""
+
 import numpy as np
 from gym import spaces
 # from simulator.prisoner_env import ObservationNames

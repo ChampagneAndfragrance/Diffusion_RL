@@ -1,3 +1,11 @@
+"""
+blue_bc.gnn_utils
+-----------------
+Small helpers for formatting observations into GNN-friendly arrays. These
+utilities are used by wrappers that feed graph-based policies or
+neural-network architectures expecting grouped agent/hideout inputs.
+"""
+
 import numpy as np
 
 def transform_obs(self, obs, obs_names, num_known_cameras, num_unknown_cameras, num_helicopters, num_search_parties, num_known_hideouts, num_unknown_hideouts, total_agents_num):

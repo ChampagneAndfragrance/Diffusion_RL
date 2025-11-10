@@ -1,3 +1,11 @@
+"""
+blue_bc.bc_utils
+----------------
+Miscellaneous utilities used by behavior cloning and baseline scripts
+(data sampling, small network builders). Kept intentionally small and
+well-documented to make it easy to reuse in experiments.
+"""
+
 import math
 import numpy as np
 import torch

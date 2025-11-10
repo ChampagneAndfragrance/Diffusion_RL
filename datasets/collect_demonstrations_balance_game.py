@@ -37,11 +37,27 @@ def collect_demonstrations(epsilon, num_runs,
                     blue_type,
                     env_path,
                     show=False):
-    """ Collect demonstrations for the homogeneous gnn where we assume all agents are the same. 
-    :param env: Environment to collect demonstrations from
-    :param policy: Policy to use for demonstration collection
-    :param repeat_stops: Number of times to repeat the last demonstration
-    
+    """Collect timestep-level demonstrations and save them as NPZ files.
+
+    This runs episodes in the specified environment and records per-timestep
+    observations for the blue and red agents, hideout locations, detections,
+    rewards, and other ancillary information. The outputs are saved under a
+    dataset folder structure expected by the diffusion training code.
+
+    Args:
+        epsilon (float): exploration/noise parameter used by some heuristics.
+        num_runs (int): number of episodes to run (seeds are starting_seed..starting_seed+num_runs-1).
+        starting_seed (int): base random seed for runs.
+        random_cameras (bool): whether to randomize camera placements per run.
+        folder_name (str): dataset folder name under `datasets/` where outputs are stored.
+        heuristic_type (str): which red planner to use (e.g., 'AStar_only', 'RRTStarOnly').
+        blue_type (str): which blue policy to use ('heuristic', 'random', 'RL', 'quasiEED').
+        env_path (str): path to YAML environment config used by `load_environment`.
+        show (bool): whether to render the environment during collection.
+
+    Side effects:
+        Creates a folder `datasets/<folder_name>/.../train` and writes `.npz` files
+        named like `seed_<seed>_known_<n>_unknown_<m>.npz` containing arrays.
     """
     num_detections = 0
     total_timesteps = 0
@@ -249,11 +265,17 @@ def collect_waypoints(epsilon, num_runs,
                     blue_type,
                     env_path,
                     show=False):
-    """ Collect demonstrations for the homogeneous gnn where we assume all agents are the same. 
-    :param env: Environment to collect demonstrations from
-    :param policy: Policy to use for demonstration collection
-    :param repeat_stops: Number of times to repeat the last demonstration
-    
+    """Collect waypoint-level trajectories produced by planners (RRT/A*/etc).
+
+    This function is focused on collecting waypoint sequences (rather than
+    full timestep traces). It saves per-run waypoint arrays suitable for
+    training diffusion models that operate on waypoint sequences.
+
+    Args: same as :func:`collect_demonstrations`.
+
+    Side effects:
+        Writes `.npz` files containing `red_locations`, `timestep_observations`,
+        and `hideout_observations` under `datasets/<folder_name>/.../train`.
     """
     num_detections = 0
     total_timesteps = 0
@@ -414,11 +436,13 @@ def collect_time(epsilon, num_runs,
                     blue_type,
                     env_path,
                     show=False):
-    """ Collect demonstrations for the homogeneous gnn where we assume all agents are the same. 
-    :param env: Environment to collect demonstrations from
-    :param policy: Policy to use for demonstration collection
-    :param repeat_stops: Number of times to repeat the last demonstration
-    
+    """Benchmark path-planning runtime for different planners.
+
+    This helper repeatedly runs the selected planner(s) and measures the
+    time taken to produce a number of waypoint trajectories. It saves
+    timing arrays to disk (npz) for later plotting/comparison.
+
+    Args: same as :func:`collect_demonstrations`.
     """
     detect_rates = []
 

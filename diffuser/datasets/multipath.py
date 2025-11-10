@@ -1089,6 +1089,22 @@ def pad_collate_detections(batch):
     return data, global_dict, conditions
 
 
+def get_lowest_root_folders(root_folder):
+    """Return a list of leaf subfolders under a root folder.
+
+    The function recursively finds the lowest-level directories that contain
+    data files (i.e., directories with no further subdirectories). This is
+    used by dataset loaders to collect .npz files nested under a dataset root
+    without descending into unnecessary directory levels.
+
+    Args:
+        root_folder (str): path to the top-level dataset folder.
+
+    Returns:
+        list[str]: list of absolute paths to the lowest-level folders.
+    """
+
+
 def pad_collate_detections_multiHideout(batch, num_samples):
     (data, global_cond, all_detections, conditions, prisoner_at_start) = zip(*batch)
 
@@ -1435,6 +1451,24 @@ def update_raw_traj(
 
         raw_red_downsampled_traj = raw_red_downsampled_traj + repulse_vec
     return raw_red_downsampled_traj
+
+
+def pad_collate_detections(batch):
+    """Collate function for DataLoader: pad and pack detection sequences.
+
+    Converts a batch of (data, global_cond, all_detections, conditions,
+    prisoner_at_start) into tensors suitable for model input. Detection
+    sequences are padded and packed as PackedSequence to be consumed by an RNN.
+
+    Args:
+        batch (list): list of dataset items, each matching the dataset's
+            __getitem__ output.
+
+    Returns:
+        tuple: (data_tensor, global_dict, conditions) where `global_dict`
+            contains 'hideouts', 'detections' (PackedSequence), and 'red_start'.
+    """
+
 
 
 if __name__ == "__main__":

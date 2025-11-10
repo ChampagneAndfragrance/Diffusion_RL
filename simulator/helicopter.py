@@ -1,3 +1,12 @@
+"""
+simulator.helicopter
+--------------------
+Helicopter agent implementation. A Helicopter is a moving sensor unit with
+trajectory helpers and a detection model. It reuses the generic
+`MovingObject` and `DetectionObject` behaviors while exposing a small
+specialization for pathing and detection range.
+"""
+
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -6,6 +15,7 @@ from simulator.terrain import TerrainType
 from .utils import clip_theta, distance, pick_closer_theta
 import simulator.fugitive
 from simulator.camera import Camera
+
 
 class Helicopter(MovingObject, DetectionObject):
     def __init__(self, terrain, location, speed, detection_object_type_coefficient):

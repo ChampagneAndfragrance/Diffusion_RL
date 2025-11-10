@@ -1,3 +1,10 @@
+"""
+simulator.camera
+----------------
+Camera sensor wrapper class used by the environment. Cameras are simple
+DetectionObjects with a flag for whether they are known to the fugitive.
+"""
+
 from simulator.abstract_object import AbstractObject, DetectionObject
 from simulator.terrain import TerrainType
 

@@ -1,3 +1,13 @@
+"""
+simulator.utils
+---------------
+Small collection of utility helpers used by simulator components.
+
+Contains distance computations, angular helpers and a helper to generate a
+camera net around a location. Kept intentionally tiny and dependency free
+so it can be reused by agents and tools.
+"""
+
 import numpy as np
 import cv2
 

@@ -1,3 +1,13 @@
+"""
+simulator.terrain
+-----------------
+Terrain representation and utilities. This module provides the `Terrain`
+class which manages a coarse world representation (mountains, dense
+forest/woods) and helper functions to place complex mountain shapes and
+forests. The representation is used by movement and detection logic to
+influence agent behaviors.
+"""
+
 import numpy as np
 import matplotlib.pyplot as plt
 import colorsys

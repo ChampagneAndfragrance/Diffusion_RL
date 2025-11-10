@@ -1,15 +1,37 @@
-# This file defines several abstract classes to define common behaviors of objects in the environment
+"""
+simulator.abstract_object
+------------------------
+Lightweight abstractions for objects that live on the simulated terrain.
+
+This module defines:
+- AbstractObject: base class for objects with a location on the terrain.
+- MovingObject: moving agents (search party, helicopter) with planning helpers
+    and basic motion primitives.
+- DetectionObject: objects that can detect other agents (cameras, etc.).
+
+The docstrings in each class describe the shape and meaning of planner entries
+(e.g. ('l', x, y), ('d', vx, vy, steps, mode), ('ls', x, y) etc.). The code
+contains defensive guards so callers can request actions even when a plan
+has been exhausted or not yet initialized.
+"""
+
 import numpy as np
 from simulator.terrain import TerrainType
 import matplotlib.pyplot as plt
 from .utils import distance
 
 class AbstractObject:
+    """Base class for any object that has a location on the terrain.
+
+    Subclasses typically store a reference to the terrain and the current
+    location as a 2-element list or array in world coordinates (x, y).
+    """
+
     def __init__(self, terrain, location):
-        """
-        Any abstract object with a location on the terrain.
-        :param terrain: a terrain instance
-        :param location: a list of length 2. For example, [5, 7]
+        """Initialize an AbstractObject.
+
+        :param terrain: terrain instance providing world representation and helpers
+        :param location: two-element list/array [x, y] representing integer grid coords
         """
         self.terrain = terrain
         self.location = location
@@ -38,12 +60,26 @@ class AbstractObject:
 
 
 class MovingObject(AbstractObject):
+    """An object that can move and maintain a simple planned path.
+
+    The planner encodes simple move commands in `self.planned_path`. Expected
+    plan entries (tuples) include at least the following forms used across
+    the codebase:
+
+    - ('l', x, y): move (locate) to the given integer world coordinates
+    - ('ls', x, y, [optional speed]): a spiral location command
+    - ('d', vx, vy, steps, mode, ...): a directional/fast movement for `steps`
+
+    Methods in this class defensively ensure the plan is non-empty before
+    callers attempt to index it (e.g. `get_action_according_to_plan`).
+    """
+
     def __init__(self, terrain, location, speed):
-        """
-        MovingObject defines object that could move.
-        :param terrain: a terrain instance
-        :param location: a list of length 2. For example, [5, 7]
-        :param speed: a number representing speed with unit in grids
+        """Create a MovingObject.
+
+        :param terrain: Terrain instance
+        :param location: initial [x, y] integer location
+        :param speed: movement speed (grid units per step)
         """
         AbstractObject.__init__(self, terrain, location)
         self.speed = speed
@@ -93,7 +129,22 @@ class MovingObject(AbstractObject):
         return direction
 
     def get_action_according_to_plan(self):
+        """Return a single-step action tuple based on the current plan.
+
+        The returned action is a 3-tuple (dx, dy, speed) where dx/dy are
+        a normalized direction vector and speed is the per-step speed to use.
+
+        This method is defensive: if `self.planned_path` is empty it will
+        generate a fallback plan (via `plan_path_to_random`) so callers do
+        not raise IndexError. Caller code expects this method to always
+        return a usable action when a MovingObject is active.
+        """
         # action is (x, y, velocity)
+        # Defensive: if planned_path is empty, create a random plan so callers
+        # don't crash when they try to index planned_path[0]. This keeps
+        # behavior stable during initialization or after plan exhaustion.
+        if len(self.planned_path) == 0:
+            self.plan_path_to_random()
         current_movement = self.planned_path[0]
         action = None
         if current_movement[0] == 'l':
@@ -171,6 +222,14 @@ class MovingObject(AbstractObject):
 
     def get_action_according_to_plan_para(self):
         # action is (x, y, velocity)
+        # Defensive: ensure there is at least one plan entry. Use the para
+        # variant so speed ratios are respected when available.
+        if len(self.planned_path) == 0:
+            try:
+                self.plan_path_to_random_para(speed_ratio=1.0)
+            except Exception:
+                # fallback to non-para planner if something goes wrong
+                self.plan_path_to_random()
         current_movement = self.planned_path[0]
         action = None
         if current_movement[0] == 'l':
@@ -233,6 +292,9 @@ class MovingObject(AbstractObject):
 
 
     def move_according_to_plan(self):
+        # Defensive: ensure planned_path is non-empty before using it.
+        if len(self.planned_path) == 0:
+            self.plan_path_to_random()
         current_movement = self.planned_path[0]
         if current_movement[0] == 'l':
             self.path_v2(destination=(current_movement[1], current_movement[2]))
@@ -872,20 +934,34 @@ class MovingObject(AbstractObject):
 
 
 class DetectionObject(AbstractObject):
+    """Base class for objects that can detect other agents.
+
+    This class implements a simple deterministic detection model used by
+    cameras, helicopters and other sensor-like objects. Detection ranges
+    and the probability of detection are computed from the object's
+    `detection_object_type_coefficient` and the terrain coefficients.
+    """
+
     detection_factor = 4.0
+
     def __init__(self, terrain, location,
                  detection_object_type_coefficient):
-        """
-        DetectionObject defines object that is able to detect.
-        :param terrain: a terrain instance
-        :param location: a list of length 2. For example, [5, 7]
-        :param detection_object_type_coefficient: a multiplier of detection due to detection device type (for example, camera = 1, helicopter = 0.5, search party = 0.75)
+        """Initialize a DetectionObject.
+
+        :param terrain: terrain instance
+        :param location: initial [x, y] location
+        :param detection_object_type_coefficient: multiplier for sensor type
+               (e.g. camera=1.0, helicopter=0.5)
         """
 
+        # sensor configuration
         self.detection_object_type_coefficient = detection_object_type_coefficient
+        # keep a short history of detections for downstream code that may
+        # read the last two reported detections; stored as [t, x_norm, y_norm]
         self.last_two_detections = [[-1, -1, -1], [-1, -1, -1]]
+        # placeholder list for detection ranges per-blue-agent (indexed by id)
         self.detection_ranges = [0, 0, 0]
-        
+
         AbstractObject.__init__(self, terrain, location)
 
     def detect(self, location_object, speed_object, normalized_timestep, blue_id=None, prisoner_loc=None):

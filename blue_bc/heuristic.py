@@ -1,3 +1,11 @@
+"""
+blue_bc.heuristic
+-----------------
+Heuristic controllers for the blue team used for interactive recordings and
+baseline experiments. These provide simple, explainable behaviors that the
+recorder can use while a human controls the fugitive.
+"""
+
 import matplotlib.pyplot as plt
 import time
 import numpy as np
@@ -79,7 +87,24 @@ class BlueHeuristic:
 
     def init_behavior(self):
         # initialize the behavior at the beginning before any detection is made?
+        # Command each party to plan randomly. As an extra defensive step,
+        # ensure every agent has a non-empty planned_path after this call
+        # so downstream callers that index planned_path[0] won't crash.
         self.command_each_party("plan_path_to_random")
+        # Defensive: if any agent still has an empty plan, force a plan.
+        for sp in self.env.search_parties_list:
+            if not getattr(sp, 'planned_path', None):
+                try:
+                    sp.plan_path_to_random()
+                except Exception:
+                    pass
+        if self.env.is_helicopter_operating():
+            for heli in self.env.helicopters_list:
+                if not getattr(heli, 'planned_path', None):
+                    try:
+                        heli.plan_path_to_random()
+                    except Exception:
+                        pass
 
     def command_each_party(self, command, *args, **kwargs):
         for search_party in self.env.search_parties_list:

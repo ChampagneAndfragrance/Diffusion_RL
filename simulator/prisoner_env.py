@@ -1,3 +1,28 @@
+"""
+simulator.prisoner_env
+----------------------
+High-level environment for the fugitive vs. search-party simulation.
+
+This module exposes `PrisonerBothEnv` which implements a two-sided simulation:
+- a single fugitive (red) agent that accepts low-level actions [speed, theta]
+- multiple blue agents (search parties, helicopters) controlled by heuristics
+    or policies.
+
+Responsibilities:
+- initialize and reset world state, agents, and sensors
+- step the joint dynamics (step_both)
+- construct and validate observations for red and blue agents
+- render frames (fast OpenCV and a slower matplotlib mode)
+- provide convenience accessors (get_prisoner_location, get_blue_locations, etc.)
+
+Notes:
+- Observations for blue agents may include a terrain/embedding vector; if you
+    change the observation composition, update `simulator.observation_spaces`.
+- The fast renderer intentionally does not call `cv2.waitKey`; callers should
+    perform window event polling (this centralizes keyboard handling in the
+    recorder tools).
+"""
+
 import copy
 import math
 from types import SimpleNamespace
@@ -306,7 +331,18 @@ class PrisonerBothEnv(gym.Env):
         if observation_terrain_feature:
             # we save these to add to the observations
             model = ConvAutoencoder()
-            model.load_state_dict(torch.load('simulator/forest_coverage/autoencoder_state_dict.pt'))
+            # Load autoencoder weights. Use CPU map_location when CUDA is unavailable or
+            # when the checkpoint was saved on a CUDA device to avoid deserialization errors.
+            ae_path = 'simulator/forest_coverage/autoencoder_state_dict.pt'
+            try:
+                if torch.cuda.is_available():
+                    state = torch.load(ae_path)
+                else:
+                    state = torch.load(ae_path, map_location=torch.device('cpu'))
+            except Exception:
+                # final fallback: force CPU mapping
+                state = torch.load(ae_path, map_location=torch.device('cpu'))
+            model.load_state_dict(state)
             self._cached_terrain_embeddings = [produce_terrain_embedding(model, terrain_np) for terrain_np in
                                                forest_density_list]
             terrain_embedding_size = self._cached_terrain_embeddings[0].shape[0]
@@ -507,7 +543,10 @@ class PrisonerBothEnv(gym.Env):
         self.last_k_fugitive_detect_blue_posVel = np.zeros((8, self.num_helicopters+self.num_search_parties, 5))
 
         # INFO: Initialize the last k [red_state, blue_relatives]
-        self.last_k_red_blue_states = np.zeros((16, 12))
+        # feature_dim = red_loc(2) + red_vel(2) + blue_relatives(4 per blue agent: loc_x, loc_y, vel_x, vel_y)
+        blue_agent_count = self.num_helicopters + self.num_search_parties
+        feature_dim = 2 + 2 + 4 * blue_agent_count
+        self.last_k_red_blue_states = np.zeros((16, feature_dim))
 
         # INFO: Initialize the lask k blue detection of red
         self.lask_k_blue_detection_of_red = np.zeros((16, 1))
@@ -942,16 +981,34 @@ class PrisonerBothEnv(gym.Env):
         self.comm = comm
 
     def step_both(self, red_action: np.ndarray, blue_action: np.ndarray, localized_trgt_gaussians=None):
-        """
-        The environment moves one timestep forward with the action chosen by the agent.
-        :param red_action: an speed and direction vector for the red agent
-        :param blue_action: currently a triple of [dx, dy, speed] where dx and dy is the vector
-            pointing to where the agent should go
-            this vector should have a norm of 1
-            we can potentially take np.arctan2(dy, dx) to match action space of fugitive
+        """Advance the simulation one timestep applying red and blue actions.
 
+        Args:
+            red_action (np.ndarray): fugitive action as [speed, theta]
+                - speed: float (grid units per timestep)
+                - theta: float (radians, standard arctan2 orientation)
+            blue_action (array-like): per-blue-agent action list; each entry is
+                expected to be a 3-tuple/list [dx, dy, speed] where dx/dy form
+                a unit direction vector and speed is the movement magnitude.
+            localized_trgt_gaussians (optional): optional filtering/gaussian
+                targets passed by external code (used by some reward variants).
 
-        :return: observation, reward, done (boolean), info (dict)
+        Returns:
+            tuple: (red_obs, blue_obs, reward, done, blue_detect_idx, is_hs_detected)
+                - red_obs (np.ndarray): observation for the fugitive after the step
+                - blue_obs (np.ndarray): observation for the blue team (may include terrain embedding)
+                - reward (float): reward (depends on `reward_setting`)
+                - done (bool): whether the episode terminated
+                - blue_detect_idx (list): indices of blue units that detected the fugitive
+                - is_hs_detected (bool): special detection flag (hideout/search detection)
+
+        Implementation notes:
+            - Applies `red_action` to update the fugitive using `path_v3` and
+              advances each blue agent using their `path_v3` methods.
+            - Runs the sensor/detection pipeline and constructs observations for
+              both teams (fugitive and blue) via the `_construct_*` helpers.
+            - Reward computation depends on `self.reward_setting` and uses
+              helper methods like `get_piece_reward` or `get_rl_reward`.
         """
         # print("Before step", self.search_parties_list[0].location)
         if self.done:
@@ -1849,9 +1906,14 @@ class PrisonerBothEnv(gym.Env):
         # observation.extend(self.predicted_relative_blue_locations_from_last_two_detections)
         observation.extend(np.concatenate(self.get_relative_hs_locVels())/self.dim_x)
         
-        wp = _to_np_cpu(self.waypoints[self.waypt_idx]).astype(np.float32)
-        ploc = np.asarray(self.prisoner.location, dtype=np.float32)
-        observation.extend(((wp - ploc) / self.dim_x).tolist())
+        # waypoints may be None during certain env initializations; handle defensively
+        if self.waypoints is not None:
+            wp = _to_np_cpu(self.waypoints[self.waypt_idx]).astype(np.float32)
+            ploc = np.asarray(self.prisoner.location, dtype=np.float32)
+            observation.extend(((wp - ploc) / self.dim_x).tolist())
+        else:
+            # append zeros for waypoint-relative features when no waypoints are set
+            observation.extend([0.0, 0.0])
 
         observation = np.array(observation)
         observation = np.concatenate((observation, np.array([terrain.detection_coefficient_given_location(self.prisoner.location)])))
@@ -2744,7 +2806,9 @@ class PrisonerBothEnv(gym.Env):
         # INFO: Initialize the last k red detection of blue
         self.last_k_fugitive_detect_blue_posVel = np.zeros((8, self.num_helicopters+self.num_search_parties, 5))
 
-        self.last_k_red_blue_states = np.zeros((16, 12))
+        # Initialize last_k_red_blue_states with the correct feature dimension
+        feature_dim = len(self.get_red_blue_state())
+        self.last_k_red_blue_states = np.zeros((16, feature_dim))
         self.last_k_red_blue_states = np.roll(self.last_k_red_blue_states, shift=-1, axis=0) # first to last
         self.last_k_red_blue_states[-1] = self.get_red_blue_state()
 
@@ -2773,6 +2837,27 @@ class PrisonerBothEnv(gym.Env):
         self.waypt_idx = 1
 
         return
+
+    def reset(self, seed=None):
+        """Reset the environment and return the initial fugitive observation.
+
+        This method is the Gym-compatible `reset` entrypoint. It performs two
+        tasks:
+        1. Calls `reset_env(seed)` which performs full world initialization
+           (terrain selection, agent placement, planner priming, etc.).
+        2. Calls `reset_obs(seed)` to construct and return the initial
+           observation (the fugitive observation by default).
+
+        Args:
+            seed (int, optional): optional RNG seed forwarded to internal reset.
+
+        Returns:
+            np.ndarray: initial fugitive observation vector.
+        """
+        # Initialize environment state
+        self.reset_env(seed=seed)
+        # Return initial observation (fugitive observation by default)
+        return self.reset_obs(seed=seed)
         
 
 
@@ -2817,7 +2902,10 @@ class PrisonerBothEnv(gym.Env):
         # self._modified_blue_observation_map = self._construct_each_blue_observation_probmap(all_blue_detect_idx)
         self.blue_obs_sequence_array = np.zeros((4,) + np.array(self._modified_blue_observation_no_detections).shape) #for storing past sequence of gnn observations
         self.blue_obs_sequence_array[-1] = np.array(self._modified_blue_observation_no_detections)
-        assert self._blue_observation.shape == self.blue_observation_space.shape, "Wrong observation shape %s, %s" % (self._blue_observation.shape, self.blue_observation_space.shape)
+        # The environment constructs the blue observation including terrain embeddings
+        # (see `create_observation_space_blue_team` which populates
+        # `modified_blue_observation_space`). Use that for shape validation.
+        assert self._blue_observation.shape == self.modified_blue_observation_space.shape, "Wrong observation shape %s, %s" % (self._blue_observation.shape, self.modified_blue_observation_space.shape)
         assert self._partial_blue_observation.shape == self.blue_partial_observation_space.shape, "Wrong observation shape %s, %s" % (self._partial_blue_observation.shape, self.blue_partial_observation_space.shape)
         # assert self._ground_truth_observation.shape == self.gt_observation_space.shape, "Wrong observation shape %s, %s"  % (self._ground_truth_observation.shape, self.gt_observation_space.shape)
         # assert self._fugitive_observation.shape == self.fugitive_observation_space.shape, "Wrong observation shape %s, %s" % (self._fugitive_observation.shape, self.fugitive_observation_space.shape)
@@ -3157,7 +3245,6 @@ class PrisonerBothEnv(gym.Env):
         # print(np.max(self.canvas))
         if show:
             cv2.imshow("test", self.canvas)
-            cv2.waitKey(1)
         return (self.canvas * 255).astype('uint8')
 
     def custom_render_canvas(self, option=["prisoner", "terrain", "hideouts", "search", "cameras"], show=True, scale=3, predicted_prisoner_location=None, show_delta=False, **kwargs):
@@ -3165,7 +3252,7 @@ class PrisonerBothEnv(gym.Env):
         We allow the predicted prisoner location to be passed in which renders a predicted prisoner location
         show_delta: is a bool whether or not to display the square around the fugitive
         """
-        large_icons = kwargs['large_icons']
+        large_icons = kwargs.get('large_icons', False)
 
         # INFO: Init the canvas
         self.canvas = self.cached_terrain_image
@@ -3221,9 +3308,10 @@ class PrisonerBothEnv(gym.Env):
         # INFO: search parties
         if "search" in option:
             for i, search_party in enumerate(self.search_parties_list):
-                # icon = [self.search_party_pic_large_cv_a, self.search_party_pic_large_cv_b][i % 2]
+                # large icon variant isn't available in all builds; fall back to the regular cv icons
                 if large_icons:
-                    draw_image_on_canvas_cv(icon, search_party.location, self.large_asset_size)
+                    # fallback to the standard search party icon for large_icons as well
+                    draw_image_on_canvas_cv(self.search_party_pic_cv, search_party.location, self.large_asset_size)
                 else:
                     draw_image_on_canvas_cv(self.search_party_pic_cv, search_party.location, self.default_asset_size)
 
@@ -3233,14 +3321,15 @@ class PrisonerBothEnv(gym.Env):
             if self.is_helicopter_operating():
                 for helicopter in self.helicopters_list:
                     if large_icons:
-                        draw_image_on_canvas_cv(self.helicopter_pic_large_cv, helicopter.location, self.large_asset_size)
+                        # helicopter large icon not always present; use standard cv icon
+                        draw_image_on_canvas_cv(self.helicopter_pic_cv, helicopter.location, self.large_asset_size)
                     else:
                         draw_image_on_canvas_cv(self.helicopter_pic_cv, helicopter.location, self.default_asset_size)
                     draw_radius_of_detection(helicopter.location, 100)
             else:
                 for helicopter in self.helicopters_list:
                     if large_icons:
-                        draw_image_on_canvas_cv(self.helicopter_pic_large_cv, helicopter.location, self.large_asset_size)
+                        draw_image_on_canvas_cv(self.helicopter_pic_cv, helicopter.location, self.large_asset_size)
                     else:
                         draw_image_on_canvas_cv(self.helicopter_no_pic_cv, helicopter.location, self.default_asset_size)
 
@@ -3254,12 +3343,13 @@ class PrisonerBothEnv(gym.Env):
         if "prisoner" in option:
             if self.is_detected:
                 if large_icons:
-                    draw_image_on_canvas_cv(self.detected_prisoner_pic_large_cv, self.prisoner.location, self.large_asset_size)
+                    # fallback to the regular detected prisoner image
+                    draw_image_on_canvas_cv(self.detected_prisoner_pic_cv, self.prisoner.location, self.large_asset_size)
                 else:
                     draw_image_on_canvas_cv(self.detected_prisoner_pic_cv, self.prisoner.location, self.default_asset_size)
             else:
                 if large_icons:
-                    draw_image_on_canvas_cv(self.prisoner_pic_large_cv, self.prisoner.location, self.large_asset_size)
+                    draw_image_on_canvas_cv(self.prisoner_pic_cv, self.prisoner.location, self.large_asset_size)
                 else:
                     draw_image_on_canvas_cv(self.prisoner_pic_cv, self.prisoner.location, self.default_asset_size)
             # draw_radius_of_detection(self.prisoner.location, self.prisoner.detection_range)
@@ -3289,7 +3379,6 @@ class PrisonerBothEnv(gym.Env):
         # print(np.max(self.canvas))
         if show:
             cv2.imshow("test", self.canvas)
-            cv2.waitKey(1)
         return (self.canvas[..., ::-1] * 255).astype('uint8')
     
     def render(self, mode, show=True, fast=False, scale=3, show_delta=False):

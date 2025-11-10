@@ -1,3 +1,11 @@
+"""
+blue_bc.maddpg_hier
+-------------------
+Hierarchical MADDPG extensions and training utilities. Supports multi-level
+controllers and filtering-based agents used in hierarchical blue-team
+experiments.
+"""
+
 import enum
 import copy
 import torch

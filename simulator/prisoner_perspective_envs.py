@@ -1,3 +1,11 @@
+"""
+simulator.prisoner_perspective_envs
+----------------------------------
+Convenience wrappers that expose a prisoner-centric Gym interface backed
+by the richer `PrisonerBothEnv`. These wrappers map the joint environment
+into the observation/action shape expected by single-agent training code.
+"""
+
 from simulator.prisoner_env import PrisonerBothEnv, ObservationType
 from red_bc.heuristic import BlueHeuristic, SimplifiedBlueHeuristic
 # from blue_policies.heuristic import BlueHeuristic
@@ -8,6 +16,7 @@ from gym import spaces
 
 DIM_X = 2428
 DIM_Y = 2428
+
 
 class PrisonerEnv(gym.Wrapper):
     """ Produce environment to match our previous implementation to hot swap in

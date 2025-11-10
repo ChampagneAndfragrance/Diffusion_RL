@@ -25,7 +25,7 @@ from red_bc.heuristic import BlueHeuristic
 
 matplotlib.use("Agg")
 import matplotlib.pylab
-from utils import save_video
+from red_bc.utils import save_video
 from config_loader import config_loader
 import random
 from simulator.load_environment import load_environment
@@ -39,23 +39,8 @@ from enum import Enum, auto
 
 
 # --- Device selection helper and globals ---
-def _select_device():
-    try:
-        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            return "mps"
-    except Exception:
-        pass
-    if torch.cuda.is_available():
-        return "cuda"
-    return "cpu"
-
-
-global_device_name = _select_device()
-global_device = torch.device(global_device_name)
-
-print(
-    f"[Device] Using {global_device_name} (MPS available: {getattr(torch.backends, 'mps', None) and torch.backends.mps.is_available()}, CUDA available: {torch.cuda.is_available()})"
-)
+from utils.device import global_device, global_device_name, to_device, print_device
+print_device()
 
 
 # Move nested tensors/arrays to the selected device
@@ -73,7 +58,37 @@ def to_device(x, device):
     return x
 
 
+def _doc_to_device():
+    """(Documentation helper) to_device
+
+    The actual device-migration helper above moves nested torch tensors or
+    numpy arrays to the provided `device`. This small placeholder docstring
+    provides quick developer reference in IDEs without altering runtime
+    behavior. The functional implementation is `to_device(x, device)`.
+
+    Note: this helper is intentionally a no-op at runtime and exists solely
+    to keep module-level documentation discoverable.
+    """
+
+
 def red_rl_baseline(config, env_config):
+    """Train a MADDPG baseline for the red (fugitive) agent.
+
+    This function sets up logging directories, initializes the environment and
+    the MADDPG agent, runs episodes, collects experience into a replay buffer,
+    and performs periodic updates/checkpointing. It is intended for
+    subpolicy-level training with the project's MADDPG implementation.
+
+    Args:
+        config (dict): training and environment configuration dictionary
+            (typically loaded via `config_loader`).
+        env_config (dict): environment-specific configuration dictionary
+            referenced by `load_environment`.
+
+    Returns:
+        None. Checkpoints and logs are written to disk under the configured
+        `config['environment']['dir_path']`.
+    """
     # INFO: set up file and folder structure
     base_dir = Path(config["environment"]["dir_path"])
     log_dir = base_dir / "log"
@@ -298,6 +313,19 @@ def red_rl_baseline(config, env_config):
 
 
 def red_rl_baseline_sac(config, env_config):
+    """Train a SAC baseline for the red (fugitive) agent.
+
+    Similar to `red_rl_baseline` but using the SAC implementation. It
+    initializes SAC, runs environment rollouts, populates a ReplayBuffer,
+    performs updates, and writes checkpoints and optional videos.
+
+    Args:
+        config (dict): training and environment configuration dictionary.
+        env_config (dict): environment configuration for `load_environment`.
+
+    Returns:
+        None. Artifacts are saved to the configured directories.
+    """
     # INFO: set up file and folder structure
     base_dir = Path(config["environment"]["dir_path"])
     log_dir = base_dir / "log"
@@ -488,6 +516,21 @@ def red_rl_baseline_sac(config, env_config):
 
 
 def red_rl_piece_sac(config, env_config):
+    """Train a piecewise (waypoint) SAC policy guided by a diffusion planner.
+
+    This routine composes a diffusion-based global planner with a SAC low-level
+    controller. It initializes the DiffusionStateOnlyGlobalPlanner, creates
+    the SAC agent, and runs episodes where the diffusion planner provides
+    guidance for waypoint-level actions. Standard logging, checkpointing, and
+    buffer updates are performed.
+
+    Args:
+        config (dict): training and environment configuration dictionary.
+        env_config (dict): environment-specific options for environment loader.
+
+    Returns:
+        None. Models and logs are stored under the configured `dir_path`.
+    """
     # INFO: set up file and folder structure
     base_dir = Path(config["environment"]["dir_path"])
     log_dir = base_dir / "log"
@@ -696,6 +739,19 @@ def red_rl_piece_sac(config, env_config):
 
 
 def split_red_directions_to_direction_speed(directions):
+    """Convert a raw direction vector into [speed, angle] action format.
+
+    The project uses an action representation where the first element is the
+    desired speed (scaled by `fugitive_v_limit`) and the second element is
+    the heading angle in radians. This helper normalizes the input direction
+    vector if necessary and returns a numpy array [speed, angle].
+
+    Args:
+        directions (array-like): flattened direction vector(s) for the red agent.
+
+    Returns:
+        numpy.ndarray: a 2-element array [speed, angle] suitable for environment.step.
+    """
     red_actions_norm_angle_vel = []
     red_actions_directions = np.split(directions, 1)
     fugitive_v_limit = 15

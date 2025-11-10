@@ -1,3 +1,11 @@
+"""
+blue_bc.maddpg_shared
+----------------------
+Shared MADDPG training harness that supports parameter sharing across
+agent types. This module implements higher-level training loops and
+convenience wrappers used by experiment scripts.
+"""
+
 import enum
 import copy
 import torch

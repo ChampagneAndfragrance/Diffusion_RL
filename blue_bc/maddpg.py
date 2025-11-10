@@ -1,3 +1,12 @@
+"""
+blue_bc.maddpg
+--------------
+MADDPG (Multi-Agent DDPG) implementation and helpers used for blue-team
+multi-agent baselines. This module contains the core learner classes and
+utilities for training centralized/decentralized critic variants used in
+experiments.
+"""
+
 import enum
 import copy
 import torch
