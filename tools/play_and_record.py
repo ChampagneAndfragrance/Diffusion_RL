@@ -5,18 +5,18 @@ Usage:
     Activate your project's venv (must have opencv-python installed) and run:
         python3 tools/play_and_record.py --outdir demonstrations
 
-Controls (no HUD):
-    W / Up Arrow    : increase speed
-    S / Down Arrow  : decrease speed
-    A / Left Arrow  : rotate left
-    D / Right Arrow : rotate right
+Controls:
+    W / Up Arrow    : move up
+    S / Down Arrow  : move down
+    A / Left Arrow  : move left
+    D / Right Arrow : move right
     SPACE           : stop (speed=0)
     R               : reset & save current episode (if any) and start a new one
     Q / ESC         : quit and save current episode
 
 Notes:
 - This script uses the environment's fast OpenCV renderer (simulator/prisoner_env.py fast render).
-- No HUD overlay is drawn; the renderer window is used for visuals and cv2.waitKey to collect keystrokes.
+
 - Saved files: per-episode compressed .npz containing lists of states and observations produced by the environment.
 """
 
@@ -53,11 +53,29 @@ def save_episode(outdir, episode_idx, records):
     print(f"Saved episode {episode_idx} -> {fname} (len={len(records)})")
 
 
-def run(outdir, speed_init=12.0, theta_init=0.0, speed_step=1.0, theta_step=0.2, debug=False):
+def run(outdir, speed_init=5.0, theta_init=0.0, seed=None):
     make_dirs(outdir)
+    
+    # Set random seed if provided for reproducible camera/hideout/spawn placement
+    if seed is not None:
+        import random
+        random.seed(seed)
+        np.random.seed(seed)
 
-    env = PrisonerBothEnv()
-    blue_policy = BlueHeuristic(env)
+    # Create environment with randomized cameras, hideout locations, and spawn position
+    # camera_net_bool=False disables the camera net cluster in top-right corner
+    # spawn_mode='uniform' randomizes starting position across the map
+    # Use pre-generated Perlin noise terrain maps for natural forest patterns
+    env = PrisonerBothEnv(
+        terrain_map='simulator/forest_coverage/map_set',
+        random_cameras=True,
+        random_hideout_locations=True,
+        camera_net_bool=False,
+        num_random_known_cameras=5,
+        num_random_unknown_cameras=25,
+        spawn_mode='uniform'
+    )
+    blue_policy = BlueHeuristic(env, debug=False)  # Set debug=True to see blue team planning (saves plots to logs/temp/)
     blue_policy.init_behavior()
 
     episode_idx = 0
@@ -65,7 +83,6 @@ def run(outdir, speed_init=12.0, theta_init=0.0, speed_step=1.0, theta_step=0.2,
 
     speed = float(speed_init)
     theta = float(theta_init)
-    control_mode = 'direct'  # 'direct' maps WASD to world directions; 'tank' uses speed+theta
 
     paused = False
     print("Controls: WASD/arrows to drive, SPACE stop, R reset+save, Q quit+save")
@@ -74,19 +91,22 @@ def run(outdir, speed_init=12.0, theta_init=0.0, speed_step=1.0, theta_step=0.2,
     # is purely visual; the full trajectory is already saved in records per timestep.
     prisoner_trail = []
 
-    # Key-hold emulation: OpenCV returns individual keycodes but not key-release
-    # events. To support multi-directional presses (W+D, diagonals, etc.) we
-    # maintain a timestamp of the last time each logical key was seen. Keys are
-    # considered "active" if they've been pressed within `hold_timeout` seconds.
-    last_key_times = {}
-    hold_timeout = 0.5  # seconds; tune to feel of key-hold/auto-repeat
-    # speed scaling applied when sending action to the environment to make
-    # keyboard-driven movement feel snappier. You can lower this if it's too fast.
-    speed_scale = 2.0
+    # Key-hold tracking: OpenCV returns individual keycodes but not key-release
+    # events. We track which frame each key was last seen on. Keys stay active
+    # for enough frames to bridge OS auto-repeat (~250ms), balancing hold vs release responsiveness.
+    last_key_frame = {}  # maps key name -> frame number when last seen
+    frame_counter = 0
+    key_hold_frames = 10  # keys stay active for 10 frames (~167ms) to allow multi-key detection
+    
+    # Smooth movement parameters
+    max_speed = 7.5  # match fugitive speed limit for realistic detection
+    acceleration = 100.0  # instant acceleration to max speed
+    deceleration = 100.0  # instant deceleration to stop
 
     try:
         obs = env.reset()
-        prev_red_action = None
+        red_obs = obs  # Initial observation for red (prisoner)
+        blue_obs = np.zeros(env.blue_observation_space.shape)  # Initialize blue obs
         # Arrow key autodetection support: try to load saved keycodes from
         # ~/.diffusionrl_keycodes.json. If --autocapture is used, the script
         # will prompt the user to press each arrow key and save the observed
@@ -106,11 +126,10 @@ def run(outdir, speed_init=12.0, theta_init=0.0, speed_step=1.0, theta_step=0.2,
                         cand = [raw, raw & 0xFF, (raw >> 16) & 0xFFFF]
                         # dedupe
                         saved_keycodes[k] = sorted(set(cand))
-                if debug:
-                    print('Loaded saved keycodes from', keycodes_file)
             except Exception:
                 saved_keycodes = {}
         while True:
+            frame_counter += 1
             # If autocapture requested, perform capture before main loop starts
             if args_autocapture := getattr(run, '_autocapture_flag', False):
                 # perform interactive capture once, populate saved_keycodes
@@ -149,12 +168,40 @@ def run(outdir, speed_init=12.0, theta_init=0.0, speed_step=1.0, theta_step=0.2,
             # render (fast) but don't let the env call imshow — we will overlay
             # a small HUD and present the image ourselves so key handling is
             # entirely controlled here.
-            img = env.render('human', show=False, fast=True)
-
-            # draw a minimal HUD on the image so the player can see speed/theta and mode
             try:
-                hud_text = f"mode={control_mode} spd={speed:.1f} theta={theta:.2f}"
-                cv2.putText(img, hud_text, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                img = env.render('human', show=False, fast=True)
+                
+                # Make a copy to avoid any potential corruption
+                img = img.copy()
+            except Exception as e:
+                print(f"ERROR: Rendering failed: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
+
+            # draw a minimal HUD on the image so the player can see speed/theta
+            try:
+                # Show detection status and active keys for debugging
+                detection_status = "DETECTED!" if env.is_detected else "Hidden"
+                active_str = ','.join(sorted(active_keys)) if active_keys else "none"
+                
+                # Find nearest camera and show distance
+                prisoner_loc = np.array(env.get_prisoner_location())
+                min_cam_dist = float('inf')
+                for cam in env.camera_list:
+                    dist = np.linalg.norm(prisoner_loc - np.array(cam.location))
+                    if dist < min_cam_dist:
+                        min_cam_dist = dist
+                
+                # Show detection range for current speed
+                if speed == 0:
+                    detect_range = 1.0
+                else:
+                    # Approximate: detection_factor(4.0) * terrain(~1.0) * type(1.0) * speed + 1
+                    detect_range = 4.0 * speed + 1
+                
+                hud_text = f"spd={speed:.1f} | {detection_status} | keys={active_str} | nearest_cam={min_cam_dist:.1f} | detect_range={detect_range:.0f}"
+                cv2.putText(img, hud_text, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
                 # highlight prisoner location to make it easier to spot
                 pr = env.get_prisoner_location()
                 # fast_render_canvas flips and scales internally; draw a small red circle at approximate location
@@ -176,14 +223,22 @@ def run(outdir, speed_init=12.0, theta_init=0.0, speed_step=1.0, theta_step=0.2,
 
                 # draw the current prisoner marker on top (slightly larger)
                 cv2.circle(img, (cx, cy), 8, (0, 0, 255), -1)
-            except Exception:
-                pass
+            except Exception as e:
+                # If rendering fails, at least show the error so we know what's wrong
+                print(f"Warning: HUD rendering failed: {e}")
 
             # Present image in a named window we control so OS-level focus works better
             cv2.namedWindow("DiffusionRL", cv2.WINDOW_NORMAL)
             cv2.imshow("DiffusionRL", img)
 
-            # read key. cv2.waitKey may return large codes for special keys (arrow keys) or ASCII for letters.
+            # Check if window was closed by user
+            if cv2.getWindowProperty("DiffusionRL", cv2.WND_PROP_VISIBLE) < 1:
+                print('Window closed by user')
+                if len(records) > 0:
+                    save_episode(outdir, episode_idx, records)
+                break
+
+            # Read key. cv2.waitKey may return large codes for special keys (arrow keys) or ASCII for letters.
             # It returns -1 when no key pressed.
             key = cv2.waitKey(1)
 
@@ -191,8 +246,11 @@ def run(outdir, speed_init=12.0, theta_init=0.0, speed_step=1.0, theta_step=0.2,
                 # map keys. Support both lowercase and uppercase letters as well
                 # as several common arrow-key codes OpenCV uses on different OSes.
                 ascii_key = key & 0xFF
-                if debug:
-                    print(f"key raw={key} ascii={ascii_key}")
+                # Print raw keycode and ASCII low-8bits to help debug
+                # platform-dependent arrow encodings. This prints for every
+                # key event so you can see exactly what the OS/OpenCV is
+                # returning when you press a key.
+                # print(f"Key event: raw={key} ascii={ascii_key}")  # commented out - may interfere with rendering
                 # common OpenCV arrow-key codes (platform dependent). We'll
                 # build these sets from saved_keycodes if available; otherwise
                 # fall back to a broad default list. key_matches_arrow checks a
@@ -203,10 +261,13 @@ def run(outdir, speed_init=12.0, theta_init=0.0, speed_step=1.0, theta_step=0.2,
                     ARROW_LEFT = set(int(x) for x in saved_keycodes.get('left', []))
                     ARROW_RIGHT = set(int(x) for x in saved_keycodes.get('right', []))
                 else:
-                    ARROW_UP = {82, 2490368, 65362}
-                    ARROW_DOWN = {84, 2621440, 65364}
-                    ARROW_LEFT = {81, 2424832, 65361}
-                    ARROW_RIGHT = {83, 2555904, 65363}
+                    # Common OpenCV/platform-dependent arrow key codes. Keep
+                    # this list broad to maximize chance of matching across
+                    # macOS, Linux, and Windows builds of OpenCV.
+                    ARROW_UP = {82, 2490368, 65362, 63232}
+                    ARROW_DOWN = {84, 2621440, 65364, 63233}
+                    ARROW_LEFT = {81, 2424832, 65361, 63234}
+                    ARROW_RIGHT = {83, 2555904, 65363, 63235}
 
                 def key_matches_arrow(raw_key, arrow_set):
                     # check raw key, low-8 bits, and high-16 bits
@@ -219,10 +280,51 @@ def run(outdir, speed_init=12.0, theta_init=0.0, speed_step=1.0, theta_step=0.2,
                     return False
 
                 now = time.time()
+                # collect a list of logical tokens that this keypress corresponds to
+                pressed_tokens = []
+                # letters
+                if ascii_key in (ord('q'), ord('Q')) or key == 27:
+                    pressed_tokens.append('QUIT')
+                if ascii_key in (ord('r'),):
+                    pressed_tokens.append('RESET')
+                if ascii_key in (ord('m'), ord('M')):
+                    pressed_tokens.append('MODE_TOGGLE')
+                if ascii_key == ord(' '):
+                    pressed_tokens.append('SPACE')
+                if ascii_key == ord('p'):
+                    pressed_tokens.append('PAUSE')
+                # WASD
+                if ascii_key in (ord('w'), ord('W')):
+                    pressed_tokens.append('w')
+                if ascii_key in (ord('s'), ord('S')):
+                    pressed_tokens.append('s')
+                if ascii_key in (ord('a'), ord('A')):
+                    pressed_tokens.append('a')
+                if ascii_key in (ord('d'), ord('D')):
+                    pressed_tokens.append('d')
+                # arrows (check various encodings)
+                if saved_keycodes:
+                    if key_matches_arrow(key, ARROW_UP):
+                        pressed_tokens.append('up')
+                    if key_matches_arrow(key, ARROW_DOWN):
+                        pressed_tokens.append('down')
+                    if key_matches_arrow(key, ARROW_LEFT):
+                        pressed_tokens.append('left')
+                    if key_matches_arrow(key, ARROW_RIGHT):
+                        pressed_tokens.append('right')
+                else:
+                    # still check against fallback sets
+                    if key_matches_arrow(key, ARROW_UP):
+                        pressed_tokens.append('up')
+                    if key_matches_arrow(key, ARROW_DOWN):
+                        pressed_tokens.append('down')
+                    if key_matches_arrow(key, ARROW_LEFT):
+                        pressed_tokens.append('left')
+                    if key_matches_arrow(key, ARROW_RIGHT):
+                        pressed_tokens.append('right')
 
-                # helper: mark a logical key active at current timestamp
-                def mark_key_active(token):
-                    last_key_times[token] = now
+                if pressed_tokens:
+                    print(f'Frame {frame_counter}: Detected tokens:', pressed_tokens)
 
                 if ascii_key in (ord('q'), ord('Q')) or key == 27:  # q or ESC
                     print('Quit received')
@@ -236,86 +338,96 @@ def run(outdir, speed_init=12.0, theta_init=0.0, speed_step=1.0, theta_step=0.2,
                         episode_idx += 1
                     records = []
                     obs = env.reset()
+                    red_obs = obs
+                    blue_obs = np.zeros(env.blue_observation_space.shape)
                     blue_policy.reset()
                     blue_policy.init_behavior()
                     speed = speed_init
                     theta = theta_init
                     continue
-                elif ascii_key in (ord('m'), ord('M')):
-                    # toggle control mode
-                    control_mode = 'tank' if control_mode == 'direct' else 'direct'
-                    print('Control mode ->', control_mode)
                 elif ascii_key == ord(' '):  # space
+                    # Clear all directional keys for immediate stop
+                    last_key_frame.clear()
                     speed = 0.0
                 elif ascii_key == ord('p'):
                     paused = not paused
                     print('Paused' if paused else 'Unpaused')
                 else:
-                    # update key timestamps for held-key emulation
+                    # Add currently pressed directional keys to active set
                     if ascii_key in (ord('w'), ord('W')) or key_matches_arrow(key, ARROW_UP):
-                        mark_key_active('w')
-                        mark_key_active('up')
+                        last_key_frame['w'] = frame_counter
+                        last_key_frame['up'] = frame_counter
                     if ascii_key in (ord('s'), ord('S')) or key_matches_arrow(key, ARROW_DOWN):
-                        mark_key_active('s')
-                        mark_key_active('down')
+                        last_key_frame['s'] = frame_counter
+                        last_key_frame['down'] = frame_counter
                     if ascii_key in (ord('a'), ord('A')) or key_matches_arrow(key, ARROW_LEFT):
-                        mark_key_active('a')
-                        mark_key_active('left')
+                        last_key_frame['a'] = frame_counter
+                        last_key_frame['left'] = frame_counter
                     if ascii_key in (ord('d'), ord('D')) or key_matches_arrow(key, ARROW_RIGHT):
-                        mark_key_active('d')
-                        mark_key_active('right')
+                        last_key_frame['d'] = frame_counter
+                        last_key_frame['right'] = frame_counter
 
-                    # compute active keys (within hold_timeout)
-                    active = {k for k, t in last_key_times.items() if now - t < hold_timeout}
+            # Compute which keys are currently active (seen within last few frames)
+            active_keys = {k for k, f in last_key_frame.items() if frame_counter - f <= key_hold_frames}
 
-                    # WASD/arrow controls — behavior depends on control_mode
-                    if control_mode == 'tank':
-                        # W/S increase/decrease speed
-                        if 'w' in active or 'up' in active:
-                            speed = float(min(80.0, speed + speed_step))
-                        if 's' in active or 'down' in active:
-                            speed = float(max(0.0, speed - speed_step))
-                        # A/D rotate (can be combined with W/S)
-                        if 'a' in active or 'left' in active:
-                            theta -= theta_step
-                        if 'd' in active or 'right' in active:
-                            theta += theta_step
-                    else:
-                        # direct mode: combine active direction keys for diagonal movement
-                        direct_dx = 0
-                        direct_dy = 0
-                        if 'w' in active or 'up' in active:
-                            direct_dy += 1
-                        if 's' in active or 'down' in active:
-                            direct_dy -= 1
-                        if 'a' in active or 'left' in active:
-                            direct_dx -= 1
-                        if 'd' in active or 'right' in active:
-                            direct_dx += 1
+            # Debug output: show current state
+            prisoner_loc = env.get_prisoner_location()
+            sp_locs, heli_locs = env.get_blue_locations()
+            print(f'Frame {frame_counter}: Prisoner@({prisoner_loc[0]:.1f},{prisoner_loc[1]:.1f}) | '
+                  f'Active keys: {sorted(active_keys) if active_keys else "none"} | '
+                  f'Speed: {speed:.1f} | Theta: {theta:.2f} | '
+                  f'Detected: {"YES" if env.is_detected else "no"} | '
+                  f'Search parties: {len(sp_locs)} | Helicopters: {len(heli_locs)}')
 
-                        if direct_dx != 0 or direct_dy != 0:
-                            # compute heading (dy positive -> up)
-                            theta = float(math.atan2(direct_dy, direct_dx))
-                            # responsive default speed when starting from near-zero
-                            if speed < 1.0:
-                                speed = 32.0
+            # Direct control: combine active direction keys for diagonal movement
+            direct_dx = 0
+            direct_dy = 0
+            if 'w' in active_keys or 'up' in active_keys:
+                direct_dy += 1
+            if 's' in active_keys or 'down' in active_keys:
+                direct_dy -= 1
+            if 'a' in active_keys or 'left' in active_keys:
+                direct_dx -= 1
+            if 'd' in active_keys or 'right' in active_keys:
+                direct_dx += 1
+
+            if direct_dx != 0 or direct_dy != 0:
+                # compute target heading (dy positive -> up)
+                target_theta = float(math.atan2(direct_dy, direct_dx))
+                
+                # Calculate shortest angular distance
+                angle_diff = target_theta - theta
+                while angle_diff > math.pi:
+                    angle_diff -= 2 * math.pi
+                while angle_diff < -math.pi:
+                    angle_diff += 2 * math.pi
+                
+                # Fast but smooth turning for responsive diagonal transitions
+                if abs(angle_diff) < 0.1:
+                    theta = target_theta  # Snap when very close
+                else:
+                    turn_rate = 0.3  # Fast turning rate for video game feel
+                    theta += angle_diff * turn_rate
+                
+                # Instant max speed
+                speed = max_speed
+            else:
+                # no keys pressed - smooth deceleration
+                if speed > 0:
+                    speed = max(speed - deceleration, 0.0)
+                else:
+                    speed = 0.0
 
             if paused:
                 time.sleep(0.02)
                 continue
 
-            # Build red action depending on control_mode. In 'direct' mode we map
-            # WASD to immediate direction; in 'tank' mode we treat speed+theta as
-            # differential controls. Apply speed scaling so keyboard-driven motion
-            # is more responsive; the scaling is internal to the recorder only.
-            red_action = np.array([float(speed * speed_scale), theta], dtype=np.float32)
-            if debug:
-                if prev_red_action is None or not np.allclose(prev_red_action, red_action):
-                    print('red_action ->', red_action)
-                prev_red_action = red_action.copy()
+            # Build red action from current speed and heading.
+            # WASD/arrows map to immediate direction and stop when released.
+            red_action = np.array([float(speed), theta], dtype=np.float32)
 
-            # blue action from heuristic
-            blue_action = blue_policy.get_each_action()
+            # blue action from heuristic - pass blue_obs so it can detect the prisoner
+            blue_action = blue_policy.predict(blue_obs)
 
             # step the combined environment
             red_obs, blue_obs, reward, done, blue_detect_idx, is_hs_detected = env.step_both(red_action, blue_action)
@@ -341,13 +453,21 @@ def run(outdir, speed_init=12.0, theta_init=0.0, speed_step=1.0, theta_step=0.2,
             records.append(rec)
 
             if done:
-                print('Episode done at timestep', env.timesteps)
+                # Show why the episode ended
+                if env.timesteps >= env.max_timesteps:
+                    print(f'Episode done: Time limit reached ({env.timesteps}/{env.max_timesteps} timesteps)')
+                elif env.near_goal:
+                    print(f'Episode done: Reached hideout at timestep {env.timesteps}')
+                else:
+                    print(f'Episode done at timestep {env.timesteps}')
                 save_episode(outdir, episode_idx, records)
                 episode_idx += 1
                 records = []
+                
+                # Reset environment for next episode
                 obs = env.reset()
-                blue_policy.reset()
-                blue_policy.init_behavior()
+                red_obs = obs
+                blue_obs = np.zeros(env.blue_observation_space.shape)
                 speed = speed_init
                 theta = theta_init
 
@@ -358,10 +478,10 @@ def run(outdir, speed_init=12.0, theta_init=0.0, speed_step=1.0, theta_step=0.2,
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--outdir', type=str, default='demos', help='directory to save episodes (.npz)')
-    parser.add_argument('--speed', type=float, default=3.0, help='initial speed')
+    parser.add_argument('--speed', type=float, default=5.0, help='initial speed')
     parser.add_argument('--theta', type=float, default=0.0, help='initial heading in radians')
-    parser.add_argument('--debug', action='store_true', help='enable debug prints for keycodes and actions')
     parser.add_argument('--autocapture', action='store_true', help='interactively capture arrow keycodes and save to ~/.diffusionrl_keycodes.json')
+    parser.add_argument('--seed', type=int, default=None, help='random seed for reproducible camera/hideout/spawn placement')
     args = parser.parse_args()
 
     # If user requested autocapture, set a temporary flag on the run function
@@ -369,4 +489,4 @@ if __name__ == '__main__':
     if args.autocapture:
         setattr(run, '_autocapture_flag', True)
 
-    run(args.outdir, speed_init=args.speed, theta_init=args.theta, debug=args.debug)
+    run(args.outdir, speed_init=args.speed, theta_init=args.theta, seed=args.seed)

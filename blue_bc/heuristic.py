@@ -17,8 +17,8 @@ from blue_bc.utils import HierScheduler
 class BlueHeuristic:
     def __init__(self, env, debug=False):
         self.env = env
-        # self.search_parties = search_parties
-        # self.helicopters = helicopters
+        self.search_parties = env.search_parties_list
+        self.helicopters = env.helicopters_list
         self.detection_history = []
         self.debug = debug
         self.fig, self.ax = plt.subplots()
@@ -26,8 +26,8 @@ class BlueHeuristic:
         plt.clf()
 
     def reset(self):
-        # self.search_parties = search_parties
-        # self.helicopters = helicopters
+        self.search_parties = self.env.search_parties_list
+        self.helicopters = self.env.helicopters_list
         self.detection_history = []
 
     def predict(self, blue_observation: np.ndarray):

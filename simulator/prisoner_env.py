@@ -180,8 +180,8 @@ class PrisonerBothEnv(gym.Env):
                  terrain=None,
                  terrain_map=None,
                  num_towns=0,
-                 num_search_parties=2,
-                 num_helicopters=1,
+                 num_search_parties=4,
+                 num_helicopters=2,
                  helicopter_battery_life=360,
                  helicopter_recharge_time=360,
                  spawn_mode='normal',
@@ -215,7 +215,7 @@ class PrisonerBothEnv(gym.Env):
                  step_reset=True,
                  debug=False,
                  store_last_k_fugitive_detections=False,
-                 search_party_speed=6.5,
+                 search_party_speed=8.5,
                  helicopter_speed = 127,
                  fugitive_speed_limit = 7.5,
                  include_fugitive_location_in_blue_obs=False,
@@ -295,8 +295,12 @@ class PrisonerBothEnv(gym.Env):
                 dim_y = 2428
                 percent_dense = 0.30
                 size_of_dense_forest = int(dim_x * percent_dense)
-                forest_density_array = generate_square_map(size_of_dense_forest=size_of_dense_forest, dim_x=dim_x,
-                                                           dim_y=dim_y)
+                # Use original square map (won't be used since we're loading from file)
+                forest_density_array = generate_square_map(
+                    size_of_dense_forest=size_of_dense_forest, 
+                    dim_x=dim_x,
+                    dim_y=dim_y
+                )
                 forest_density_list = [forest_density_array]
                 self.terrain_list = [Terrain(dim_x=dim_x, dim_y=dim_y, forest_color_scale=forest_color_scale,
                                              forest_density_array=forest_density_array,
@@ -606,6 +610,11 @@ class PrisonerBothEnv(gym.Env):
         self._terrain_embedding = self._cached_terrain_embeddings[terrain_index]
 
     def place_random_hideouts(self):
+        """Place known and unknown hideouts at random locations.
+
+        Ensures hideouts are a minimum distance from the fugitive start and
+        from each other. Populates `self.hideout_list` with Hideout objects.
+        """
         for known_hid in range(self.num_known_hideouts):
             if known_hid == 0:
                 location = AbstractObject.generate_random_locations(self.dim_x, self.dim_y)
@@ -654,8 +663,13 @@ class PrisonerBothEnv(gym.Env):
                 self.hideout_list.append(Hideout(self.terrain, location=location, known_to_good_guys=False))
 
     def place_fixed_hideouts(self):
-        # specify hideouts' locations. These are passed in from the input args
-        # We select a number of hideouts from num_known_hideouts and num_unknown_hideouts
+        """Select hideouts from configured lists and populate hideout lists.
+
+        Samples the configured `known_hideout_locations` and
+        `unknown_hideout_locations` according to `self.num_known_hideouts` and
+        `self.num_unknown_hideouts` and builds `self.hideout_list`,
+        `self.known_hideout_list`, and `self.unknown_hideout_list`.
+        """
 
         assert self.num_known_hideouts <= len(self.known_hideout_locations), f"Must provide a list of known_hideout_locations ({len(self.known_hideout_locations)}) greater than number of known hideouts {self.num_known_hideouts}"
         assert self.num_unknown_hideouts <= len(self.unknown_hideout_locations), f"Must provide a list of known_hideout_locations ({len(self.unknown_hideout_locations)}) greater than number of known hideouts {self.num_unknown_hideouts}"
@@ -684,71 +698,94 @@ class PrisonerBothEnv(gym.Env):
             - search parties are initialized randomly
             - prisoner is initialized by different self.spawn_mode
         """
+        # initialize containers for dynamic entities in the world
         self.camera_list = []
         self.helicopters_list = []
         self.hideout_list = []
         self.search_parties_list = []
         self.town_list = []
         self.hideout_list = []
+        # communication vectors for blue-side agents (helicopters + search parties)
         self.comm = [np.zeros(self.comm_dim) for i in range(self.num_helicopters + self.num_search_parties)]
+        # minimum allowed separation between hideouts (in grid units)
         self.min_distance_between_hideouts = 300
 
-        # randomized
+        # Initialize prisoner location BEFORE hideouts if using random hideouts
+        if self.random_hideout_locations:
+            if self.spawn_mode == 'normal':
+                prisoner_location = [2400, 2400]
+            elif self.spawn_mode == 'uniform':
+                mountain_range = 150
+                near_mountain = 0
+                while near_mountain < mountain_range:
+                    prisoner_location = AbstractObject.generate_random_locations(self.dim_x, self.dim_y)
+                    m_dists = np.array([np.linalg.norm(np.array(prisoner_location) - np.array([m[1], m[0]])) for m in self.terrain.mountain_locations])
+                    near_mountain = min(m_dists)
+            elif self.spawn_mode == 'corner':
+                prisoner_location = AbstractObject.generate_random_locations_with_range([self.dim_x-self.spawn_range, self.dim_x], [self.dim_y-self.spawn_range, self.dim_y])
+            else:
+                # For other spawn modes with random hideouts, use normal spawn
+                prisoner_location = [2400, 2400]
+            
+            self.prisoner = Fugitive(self.terrain, prisoner_location, fugitive_speed_limit=self.fugitive_speed_limit)
+            self.prisoner_start_location = prisoner_location
+
+        # Now place hideouts
         if not self.random_hideout_locations:
             self.place_fixed_hideouts()
         else:
-            raise NotImplementedError
-            # Random hideouts have not been implemented with spawn mode as uniform hideout dist
-            # Random hideouts need to have prisoner location initialized first
+            # Random hideouts - prisoner already initialized above
             self.place_random_hideouts()
 
-        if self.spawn_mode == 'normal':
-            prisoner_location = [2400, 2400] # original [2400, 2400]
-        elif self.spawn_mode == 'uniform':
-            # in_mountain = True
-            mountain_range = 150
-            near_mountain = 0
-            while near_mountain < mountain_range:
-                # We do not want to place the fugitive on a mountain!
-                prisoner_location = AbstractObject.generate_random_locations(self.dim_x, self.dim_y)
-                # We do not want to place the fugitive within a distance of the mountain!
-                m_dists = np.array([np.linalg.norm(np.array(prisoner_location) - np.array([m[1], m[0]])) for m in self.terrain.mountain_locations])
-                near_mountain = min(m_dists)
-        elif self.spawn_mode == 'uniform_hideout_dist':
-            # Spawn uniformly on the map but with a distance of at least min_distance_from_hideout_to_start
-            mountain_range = 150
-            near_mountain = 0
-            min_dist = 0
-            while near_mountain < mountain_range or min_dist < self.min_distance_from_hideout_to_start:
-                prisoner_location = AbstractObject.generate_random_locations(self.dim_x, self.dim_y)
-                s = [tuple(i.location) for i in self.hideout_list]
-                dists = np.array([math.sqrt((prisoner_location[0] - s0) ** 2 + (prisoner_location[1] - s1) ** 2) for s0, s1 in s])
-                min_dist = min(dists)
-                
-                # We do not want to place the fugitive within a distance of the mountain!
-                m_dists = np.array([np.linalg.norm(np.array(prisoner_location) - np.array([m[1], m[0]])) for m in self.terrain.mountain_locations])
-                near_mountain = min(m_dists)
-        elif self.spawn_mode == 'hideout':
-            in_mountain = True
-            in_map = False
-            while in_mountain or not in_map:
-                # We do not want to place the fugitive on a mountain or outside the map!
-                hideout_id = np.random.choice(range(len(self.unknown_hideout_list)))
-                hideout_loc = np.array(self.unknown_hideout_list[hideout_id].location)
-                angle = np.random.random() * 2 * math.pi - math.pi
-                radius = self.hideout_radius + np.random.random() * self.spawn_range
-                vector = np.array([math.cos(angle), math.sin(angle)]) * radius
-                prisoner_location = (hideout_loc + vector).astype(int).tolist()
-                in_mountain = self.terrain.world_representation[0, np.minimum(prisoner_location[0], self.dim_x-1), np.minimum(prisoner_location[1], self.dim_y-1)] == 1
-                in_map = prisoner_location[0] in range(0, self.dim_x) and \
-                         prisoner_location[1] in range(0, self.dim_y)
-        elif self.spawn_mode == 'corner':
-            # generate the fugitive randomly near the top right corner
-            prisoner_location = AbstractObject.generate_random_locations_with_range([self.dim_x-self.spawn_range, self.dim_x],                                                                                    [self.dim_y-self.spawn_range, self.dim_y])
-        else:
-            raise ValueError('Unknown spawn mode "%s"' % self.spawn_mode)
-        self.prisoner = Fugitive(self.terrain, prisoner_location, fugitive_speed_limit=self.fugitive_speed_limit)
-        self.prisoner_start_location = prisoner_location
+        # Initialize prisoner location AFTER hideouts if using fixed hideouts
+        if not self.random_hideout_locations:
+            if self.spawn_mode == 'normal':
+                prisoner_location = [2400, 2400] # original [2400, 2400]
+            elif self.spawn_mode == 'uniform':
+                # in_mountain = True
+                mountain_range = 150
+                near_mountain = 0
+                while near_mountain < mountain_range:
+                    # We do not want to place the fugitive on a mountain!
+                    prisoner_location = AbstractObject.generate_random_locations(self.dim_x, self.dim_y)
+                    # We do not want to place the fugitive within a distance of the mountain!
+                    m_dists = np.array([np.linalg.norm(np.array(prisoner_location) - np.array([m[1], m[0]])) for m in self.terrain.mountain_locations])
+                    near_mountain = min(m_dists)
+            elif self.spawn_mode == 'uniform_hideout_dist':
+                # Spawn uniformly on the map but with a distance of at least min_distance_from_hideout_to_start
+                mountain_range = 150
+                near_mountain = 0
+                min_dist = 0
+                while near_mountain < mountain_range or min_dist < self.min_distance_from_hideout_to_start:
+                    prisoner_location = AbstractObject.generate_random_locations(self.dim_x, self.dim_y)
+                    s = [tuple(i.location) for i in self.hideout_list]
+                    dists = np.array([math.sqrt((prisoner_location[0] - s0) ** 2 + (prisoner_location[1] - s1) ** 2) for s0, s1 in s])
+                    min_dist = min(dists)
+                    
+                    # We do not want to place the fugitive within a distance of the mountain!
+                    m_dists = np.array([np.linalg.norm(np.array(prisoner_location) - np.array([m[1], m[0]])) for m in self.terrain.mountain_locations])
+                    near_mountain = min(m_dists)
+            elif self.spawn_mode == 'hideout':
+                in_mountain = True
+                in_map = False
+                while in_mountain or not in_map:
+                    # We do not want to place the fugitive on a mountain or outside the map!
+                    hideout_id = np.random.choice(range(len(self.unknown_hideout_list)))
+                    hideout_loc = np.array(self.unknown_hideout_list[hideout_id].location)
+                    angle = np.random.random() * 2 * math.pi - math.pi
+                    radius = self.hideout_radius + np.random.random() * self.spawn_range
+                    vector = np.array([math.cos(angle), math.sin(angle)]) * radius
+                    prisoner_location = (hideout_loc + vector).astype(int).tolist()
+                    in_mountain = self.terrain.world_representation[0, np.minimum(prisoner_location[0], self.dim_x-1), np.minimum(prisoner_location[1], self.dim_y-1)] == 1
+                    in_map = prisoner_location[0] in range(0, self.dim_x) and \
+                             prisoner_location[1] in range(0, self.dim_y)
+            elif self.spawn_mode == 'corner':
+                # generate the fugitive randomly near the top right corner
+                prisoner_location = AbstractObject.generate_random_locations_with_range([self.dim_x-self.spawn_range, self.dim_x],                                                                                    [self.dim_y-self.spawn_range, self.dim_y])
+            else:
+                raise ValueError('Unknown spawn mode "%s"' % self.spawn_mode)
+            self.prisoner = Fugitive(self.terrain, prisoner_location, fugitive_speed_limit=self.fugitive_speed_limit)
+            self.prisoner_start_location = prisoner_location
 
         # specify cameras' initial locations
         if(self.random_cameras):
@@ -883,6 +920,7 @@ class PrisonerBothEnv(gym.Env):
 
     @property
     def closest_unknown_hideout_location(self):
+        """Return the closest unknown hideout (numpy array) to the prisoner."""
         prisoner_location = np.array(self.get_prisoner_location())
         closest_loc = self.unknown_hideout_locations_on_map[0]
         dist_min = np.linalg.norm(closest_loc - prisoner_location)
@@ -895,6 +933,7 @@ class PrisonerBothEnv(gym.Env):
 
     @property
     def closest_known_hideout_location(self):
+        """Return the closest known hideout (numpy array) to the prisoner."""
         prisoner_location = np.array(self.get_prisoner_location())
         closest_loc = self.known_hideout_locations_on_map[0]
         dist_min = np.linalg.norm(closest_loc - prisoner_location)
@@ -3189,8 +3228,8 @@ class PrisonerBothEnv(gym.Env):
             draw_image_on_canvas_cv(self.search_party_pic_cv, search_party.location, self.default_asset_size)
             # draw_radius_of_detection(search_party.location,
             #                          search_party.base_100_pod_distance(self.current_prisoner_speed))
-            draw_radius_of_detection(search_party.location,
-                                     search_party.detection_ranges[0])
+            # draw_radius_of_detection(search_party.location,
+            #                          search_party.detection_ranges[0])
 
         # helicopters
         if self.is_helicopter_operating():
@@ -3198,8 +3237,8 @@ class PrisonerBothEnv(gym.Env):
                 draw_image_on_canvas_cv(self.helicopter_pic_cv, helicopter.location, self.default_asset_size)
                 # draw_radius_of_detection(helicopter.location,
                 #                          helicopter.base_100_pod_distance(self.current_prisoner_speed))
-                draw_radius_of_detection(helicopter.location,
-                                         helicopter.detection_ranges[0])
+                # draw_radius_of_detection(helicopter.location,
+                #                          helicopter.detection_ranges[0])
         else:
             for helicopter in self.helicopters_list:
                 draw_image_on_canvas_cv(self.helicopter_no_pic_cv, helicopter.location, self.default_asset_size)
@@ -3223,9 +3262,9 @@ class PrisonerBothEnv(gym.Env):
         camera_detection_locs_ranges = []
         for camera in self.camera_list:
             if camera.known_to_fugitive:
-                draw_image_on_canvas_cv(self.known_camera_pic_cv, camera.location, camera.detection_ranges[0])
+                draw_image_on_canvas_cv(self.known_camera_pic_cv, camera.location, self.default_asset_size)
             else:
-                draw_image_on_canvas_cv(self.unknown_camera_pic_cv, camera.location, camera.detection_ranges[0])
+                draw_image_on_canvas_cv(self.unknown_camera_pic_cv, camera.location, self.default_asset_size)
             camera_detection_locs_ranges.append([camera.location[0], camera.location[1], camera.detection_ranges[0]])
 
         # # Path to the YAML file

@@ -253,8 +253,8 @@ class Terrain:
         display_matrix[:, :, 1] = g
         display_matrix[:, :, 2] = b
 
-        # mountains
-        display_matrix[self.world_representation[0, :, :] == 1, :3] = 211 / 255, 211 / 255, 211 / 255
+        # mountains - changed to darker brown for better visibility
+        display_matrix[self.world_representation[0, :, :] == 1, :3] = 0.4, 0.3, 0.2  # brown color
 
         # imshow coordinate system is different from Cartesian system. See `prisoner_env.py` for more.
         display_matrix = np.transpose(display_matrix, [1, 0, 2])

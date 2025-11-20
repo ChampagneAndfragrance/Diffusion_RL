@@ -1,0 +1,821 @@
+Diffusion-Reinforcement Learning Hierarchical Motion Planning in
+Multi-agent Adversarial Games
+Zixuan Wu∗, Sean Ye∗, Manisha Natarajan∗and Matthew C. Gombolay∗
+Abstract — Reinforcement Learning (RL)-based motion plan-
+ning has recently shown the potential to outperform traditional
+approaches from autonomous navigation to robot manipulation.
+In this work, we focus on a motion planning task for an evasive
+target in a partially observable multi-agent adversarial pursuit-
+evasion game (PEG). Pursuit-evasion problems are relevant
+to various applications, such as search and rescue operations
+and surveillance robots, where robots must effectively plan
+their actions to gather intelligence or accomplish mission tasks
+while avoiding detection or capture. We propose a hierarchical
+architecture that integrates a high-level diffusion model to plan
+global paths responsive to environment data, while a low-level
+RL policy reasons about evasive versus global path-following
+behavior. The benchmark results across different domains and
+different observability show that our approach outperforms
+baselines by 77.18% and 47.38% on detection and goal reaching
+rate, which leads to 51.4% increasing of the performance score
+on average. Additionally, our method improves interpretability,
+flexibility and efficiency of the learned policy.1
+I. I NTRODUCTION
+Multi-agent pursuit-evasion games (PEG) [1] are ubiqui-
+tous in real-world robotics scenarios, where robotic systems
+could be applied to drug smuggler tracking [2], defensive
+escorting [3], or robot soccer [4]. In PEG, one team seeks to
+track its target while the target agent or team employs evasive
+maneuvers, and research naturally focuses on developing
+methods for either the pursuers [5] or evaders [6]–[8].
+Although there has been extensive work on developing search
+policies [9]–[11], relatively little attention has been paid
+to evasion. This lack of emphasis provides an opportunity
+to design a novel evasive policy that is useful in real-
+world scenarios, such as business ships evading pirates and
+evacuating lost people in national parks.
+Recently, learning-based methods, such as Graph Neu-
+ral Networks [12], diffusion models [13] or reinforcement
+learning (RL) methods [14] have been widely used in the
+pursuit-evasion games and similar navigation problems [15]–
+[17] (e.g. goal-reaching, path-planning, etc.). These methods
+often outperform expert policies [18]. However, learning the
+RL policy is usually subject to two key challenges—partial
+observability and high sample complexity when exploring
+large-scale, partially observable environments, as considered
+in our work.
+Researchers propose hierarchical approaches to help ex-
+ploration by structuring the goal, policies, or rewards. Goal-
+∗Authors are from the Institute of Robotics and Intelligent Machines
+(IRIM), Georgia Institute of Technology, Atlanta, GA 30308, USA.
+Correspondance Author: Zixuan Wu zwu380@gatech.edu
+1Code and supplementary details are at https://github.com/
+ChampagneAndfragrance/Diffusion_RL
+Fig. 1. Diffusion-RL Framework Overview: We first collect RRT* paths
+into a dataset. Then we use a diffusion model to learn the distribution of
+the RRT* path and generate samples as the high-level global plans to help
+learn a low-level evasive RL policy. A posterior costmap is built based on
+the learned hierarchy and detection risk and can be used to select the best
+global path in the inference stage.
+oriented reinforcement learning (for example, a replay of the
+hindsight experience [19]) increases the reward density by
+assuming that the goal has been reached in each exploration
+trajectory and corrects observation and reward accordingly.
+Hierarchical RL [20] improves sample efficiency from spatial
+or temporal abstraction by multiple hierarchically organized
+RL policies, and hybrid reward structure-based methods [21]
+try to capture the multimodal distribution of reward where
+each part of the value function can be a low-dimensional
+representation. However, their applications are tested in fully
+observable games [20] or require expert prior knowledge as
+primitives [22].
+In this paper, we propose a novel hierarchical learning
+framework that combines diffusion and RL as high- and
+low-level policies, respectively. The diffusion model is used
+as a global path generator to satisfy static map constraints,
+such as terminal states and obstacle avoidance. Furthermore,
+we employ a low-level RL policy that learns to follow the
+waypoints while prudently evading captures (see Figure 1).
+Our key insight is that using the diffusion model can improve
+the RL performance by constraining its exploration to high-
+value state-action regions and can help downstream tasks by
+providing diverse options. We find our method is especially
+useful for the evader to learn escaping behaviors in the
+large multi-agent, multi-goal partially observable settings —
+Prisoner Escape and Narco Interdiction Domain (see §III-B).
+Contributions: In summary, our contributions are three-fold:arXiv:2403.10794v2  [cs.RO]  8 May 20251) We propose a novel hierarchical system consisting of a
+diffusion model as a high-level global path planner to
+aid RL exploration and a low-level RL agent to learn
+evasive maneuvers, which outperforms all baselines.
+2) We design an algorithm to implicitly infer the cost map
+that is used to select paths within our hierarchical mo-
+tion planning framework to evade the searching agents.
+Multiple ablation studies show the interpretability, flex-
+ibility, efficiency, and generalizability of our method.
+3) Our work is the first to equip evaders with hierarchical
+motion planning to learn escaping while reaching the
+navigation goal in large partially observable environ-
+ments without expert primitives.
+II. R ELATED WORK
+A. Pursuit-Evasion Games
+A perfect information PEG (i.e., full observability) can
+be modeled as a differential game and solved using control
+theory [23]. In comparison, the incomplete information PEG
+(i.e., partial observability) is a more realistic setting since
+agents usually do not have full knowledge of the environment
+at all time. Researchers commonly use probabilistic models
+[24], [25] and formulate PEG as optimization problems to
+maximize the payoff [26], [27]. Therefore, recent research
+also focuses on obtaining the optimal policy through RL [28].
+Unfortunately, most RL works focus on pursuit policies [29],
+[30]. Some recent works [31], [32] have focused on evasive
+behaviors evolved from scratch, but these policies do not
+need to reach explicit navigation goals. In comparison, we
+derive an evader policy that can not only escape from pur-
+suers but also reach goals in large, adversarial, and partially
+observable domains.
+B. Diffusion Models in Path Generating
+Diffusion models are a class of generative models that
+have demonstrated impressive performance in generating
+sequential data in several applications, such as image syn-
+thesis and video generation [33]–[35]. Recently, there have
+been several works employing diffusion models in trajectory
+generation tasks. Diffuser [36] trains a diffusion model for
+trajectory generation on offline datasets and plans future
+trajectories with guided sampling. The diffusion policy ex-
+tends this work to imitation learning and demonstrates the
+ability to learn robust policies for various pushing tasks
+conditioned only on visual input [37]. Recent work [13]
+has extended these approaches for generating trajectories of
+multiple opponents. In our work, we further use the diffusion
+model as a trajectory planner that allows the reinforcement
+learning agent to generate diverse plan options in our par-
+tially observable pursuit-evasion domain.
+C. RL in Motion Planning
+Recent work has demonstrated the success of RL for mo-
+tion planning problems in dynamic environments [15], [38]–
+[40]. Many papers discuss how to use RL to avoid obstacles
+by analyzing exteroceptive sensor information such as RGB
+cameras [40], LIDARs [39], [40], or converted laser datafrom images [38]. However, none of these previous works
+assumes an adversarial environment where the “obstacles”
+are intelligent pursuers, or the map is as large as in our
+scenario with undetectable parts.
+The work [15] also employs a hierarchical structure in
+goal-conditioned planning; however, their environment does
+not incorporate adversaries or multiple goals, and their RL
+policy is not trained from scratch. Dynamic obstacles are
+considered in [41]; however, these obstacles can only run
+on a predefined segment with a constant velocity, and the
+map is known such that A* search can be sufficient to find
+the optimal path. In our scenario, we assume the cameras
+are hidden from the evader in a non-discovered terrain map,
+while the pursuit team can use these cameras to detect and
+track the evader.
+III. E NVIRONMENT
+A. Partially Observable Markov Decision Process
+We model adversarial search and tracking as a Partially
+Observable Markov Decision Process (POMDP). A POMDP
+for an agent can be defined by a state s, private observation
+o, action a, and a transition function T:s×a7→s. At each
+timestep t, an agent receives an observation ot, chooses an
+action at∈ A, and obtains a reward rt:s×ai7→R. The
+initial world state is drawn from a prior distribution ρ. In our
+environment (see §III-B), we assume that the evader starts
+from a random position from a corner region of the map
+while the pursuit team starts from random positions on the
+map. It is a partially observable environment for the evader
+in that 1) cameras are invisible to the evader, 2) the terrain
+map is not provided a prior, and 3) the evader may only have
+a limited detection range.
+B. Prisoner Escape and Narco Interdiction
+In our evaluation of the proposed algorithm, we employ
+two open-sourced large-scale pursuit-evasion domains [12]
+named Prisoner Escape and Narco Interdiction (Figure 2).
+In both domains, an evader (prisoner or smuggler) is being
+tracked by a team of search agents in a partially observable
+environment. In each episode, three hideouts are drawn from
+all candidate hideouts. These hideouts are only visible to
+the evader and unknown to the pursuit team, as adversarial
+teams do not communicate intent. The terminal objective of
+the evader is to reach any hideout on the map (considered
+a success) or reach the time limit (considered a failure).
+Simultaneously, the evader should learn to avoid pursuit team
+detection. The heterogeneous pursuit team consists of static
+(cameras) and dynamic agents (search parties, helicopters,
+search boats, and planes) that collaborate to search and track
+the evader in both domains.
+The maximum speed of the evader is always lower than
+the pursuit agents, making it more challenging for the evader
+to plan evasive maneuvers to successfully reach the hideouts
+undetected. The observation of the evader includes the cur-
+rent timestep, hideout locations, mountain locations, pursuer
+states, and evader states. The evader can see the pursuer any-
+where in the global-view mode and within a field-of-view inFig. 2. Prisoner Escape Domain (left) and Narco Traffic Interdiction Domain (right)
+the local-view mode, and the camera locations and visibility
+map are always hidden from the evader. In the local-view
+mode, evader’s field-of-view, de, is parameterized by the
+searching agent type, βtype, visibility, cv, and searching agent
+speed, ss:de=α·(βtype·cv·ss+η). These domains increase
+the complexity of the task and more closely match real-
+world dynamics compared to other pursuit-evasion games
+[23], [42], [43].
+C. Pursuit Team Behavior
+To provide a fair comparison between our evading algo-
+rithm and the baselines, we use a fixed heuristic policy for the
+pursuit team inspired by prior works [44], [45] that achieved
+good performance in the prisoner escape domain [14]. The
+search agents can choose to either 1) go to the last detection,
+2) search along the predicted path, or 3) search in the vicinity
+of the last detection. Searching team detection range, ds, is
+parameterized by the agent type, βtype, visibility, cv, and
+evader speed se:ds=α·(βtype·cv·se+η), which means a
+higher visibility and evader speed will lead to larger detection
+range. The pursuer policy is designed to effectively utilize
+the available information and adapt to different scenarios.
+IV. M ETHOD
+The evader’s objective is to reach one of the hideouts
+on the map and evade detection by the pursuit team, using
+only partial map knowledge, without any information about
+camera locations or models for whether the pursuers can
+detect the evader. RL or diffusion-based motion planning
+each partially fits our setting: RL can hypothetically learn to
+evade through trial-and-error. However, RL has difficulties
+with exploration in the large, adversarial, and multi-goal
+domains. On the other hand, diffusion-based motion planning
+can generate diverse plans that reach the goals; however,
+diffusion models struggle to learn evasive behaviors and
+avoid the pursuing agents. The reason is that the diffusion
+model has a relatively long denoising process that is diffi-
+cult to handle environment dynamics. Additionally, partial
+observability induces high variance in training.
+We propose to leverage the strengths of diffusion and RL
+policies by using diffusion models to guide RL exploration
+during training and generate path candidates at inference.
+We decompose the hierarchy into the following: learning
+diffusion-based global plans that meet start, terminal, and
+obstacle constraints from RRT* paths (§IV-A), employingRL local evasive behaviors to avoid detection en-route (§IV-
+B), and path selection from posteriorly constructed costmap
+during inference (§IV-C).
+Algorithm 1: Diffusion Model Training
+Data: Start Location S, Goal Locations G, Obstacle
+Location M, Constraints C=<S,G,M>,
+Data buffer D, Noise Scheduling Terms αi,¯αi,
+Learning Rate α, Denoising Timesteps T
+Result: Diffusion Model sθ
+1while buffer Dnot full do
+2 c=< ps, pg, m >∼ C ;◁Draw global constraints
+3 τ←RRT∗(c); ◁Plan RRT* path
+4 τ←Sample ↓(τ);◁Uniformly downsample path
+5D ← τ, c;◁Store trajectory, constrains in dataset
+6while not converged do
+◁Draw τ,cdiffusion timestep, and random noise
+7 τ0, c∼ D i∼ U(1, T), ϵ∼ N(0, I);
+◁Compute Score Matching MSE Loss
+8 τi←√¯αiτ0+√1−¯αiϵ;
+9L(θ) =∥ϵ−sθ(τi, i, c))∥2
+2;
+◁Update Model
+10 θ=θ+α∇θL(θ)
+Algorithm 2: Diffusion Path Generator πd
+Data: Constraints C
+Result: Global plan τ0
+1while τ0not satisfies constraints Cdo
+2 τT←sample from N(0, I);◁Gaussian Noise
+3 forallifrom Tto1do
+4 (µi,Σi)←sθ(τi),Σθ(τi)
+5 τi−1∼ N(µi,Σi); ◁Diffusion Denoise
+6 τi−1← C(τi−1); ◁Apply Constraints
+7Return τ0
+A. Diffusion Based Global Plan
+In this section, we describe how we leverage diffusion
+models as a generative motion planner to provide a prior for
+the RL agent to traverse in large, partially observable, and
+adversarial environments [46]. We utilize a diffusion modelto clone the distribution from RRT* planner and generate
+waypoints of diverse candidate paths that the agent should
+follow approximately. This diffusion path planner guides
+the exploration, increases the sample-time efficiency, and
+improves the flexibility of the downstream RL algorithm.
+The underlying insight is to constrain the RL exploration at
+a promising distribution implicitly encoded by the diffusion
+model considering the map constraints.
+The diffusion path planning should have three key at-
+tributes: 1) global constraints are satisfied (start and terminal
+locations, obstacles, etc.); 2) generated plans are diverse
+and multimodal and 3) the sampling time of the diffusion
+model is low. We guide the diffusion sampling procedure
+using constraint guidance [13] to best satisfy the constraints
+and use a small number of sampling timesteps to keep the
+sampling time low. The low sampling time allows us to run
+the diffusion model during the RL training procedure, which
+is difficult for traditional search-based planners. Additionally,
+the parallel sampling reduces the overhead at inference time
+and provides diverse candidates for the agent to use.
+We outline the diffusion training process in Algorithm 1.
+We first generate paths with RRT* (Line 3) — a sample-
+based motion planner that yields varied paths even for the
+same initial and target states, which enables the diffusion
+model to similarly generate diverse paths. Then we uniformly
+downsample the path into sparse waypoints (Line 4) and
+train a diffusion model based on these waypoints (Line 6-
+10). Generating a path with a few waypoints is sufficient
+enough to act as the high-level planner as we expect the RL
+policy to act as the low-level dynamic actor to move between
+waypoints. Generating fewer waypoints also allows sampling
+time to be faster, which is crucial for training in an RL loop.
+The sampling process is summarized in Algorithm 2 with
+diffusion path generator, πd. We apply global constraints at
+each denoising step (Line 6) to help generate a valid path
+from start to goal.
+Algorithm 3: Adversarial Behavior Learning
+Data: Initial state s0, Diffusion Global Planner πd,
+SAC replay buffer Ds
+Result: SAC low-level policy πl∗
+1while training episodes do
+2{wi}Nw
+i=0=w∼πd(w|s0);◁Waypoints from πd
+3 while winot reached do
+4 Oaug←[O|wi];◁Concat current waypoint
+5 a∼πl(a|Oaug); ◁Action from low policy
+6 O′
+aug, r←EnvStep (a); ◁Update env
+7 Ds← {Oaug, a, O′
+aug, r};◁Push to buffer
+8 ifwireached then
+9 i←i+ 1; ◁Update to next waypoint
+10 πl∗←SAC (ds∼ D s);◁Update SAC parametersB. RL Based Adversarial Behavior Learning
+In addition to our diffusion model considering the global
+objectives, it is also essential to design an algorithm di-
+rectly interacting with the environment that can not only
+accomplish the tasks from the high-level planners but also
+capture the dynamic patterns in the map to achieve the
+local adversarial detection avoiding goals. Although evading
+heuristics exist [12], we believe that a data-driven reinforce-
+ment learning algorithm is a more convenient way compared
+with the hand-crafted policy and can perform better within
+specific environment distribution.
+Therefore, we employ an RL algorithm Soft Actor-Critic
+(SAC) as the low-level policy with the following aims: 1)
+approximately follow the waypoints from the diffusion path
+and 2) adapt the evader velocities to escape from searching
+agents. We summarize RL training in Algorithm 3 where we
+augment the observation with the current desired waypoint
+from the high-level planner (Line 2, 4). The training objective
+can be formulated as Equation (1) where ≈means a similar
+low-level policy can be derived from both sides.
+R= max
+πEπ"X
+tγt·r#
+≈max
+πgEπg"
+max
+πlEπl"tgX
+τ=0tlX
+t=0γt·rwτ∼πg(w|sτ)##
+≈max
+πlEπl"tgX
+τ=0tlX
+t=0γt·rw∼πd(w|s0), s0∼ρ#
+(1)
+ρis the initial environment distribution for the start and
+hideout locations ( s0∼ρis omitted from the derivation),
+πdis the diffusion global planner, and wis the generated
+waypoints to be tracked, tgis the number of waypoints.
+Equation (1) shows that we can decompose our adversarial
+evading learning problem into a sequential optimization
+problem, including a waypoint generator and a low-level
+waypoint tracker, both of which aim to maximize the dis-
+counted accumulative reward. However, the unconstrained
+random exploration of these policies will be subject to high
+variance from the partial observability; therefore, we confine
+our exploration in a more reasonable region described by
+the diffusion policy distribution in the previous section. We
+set reward terms to guide the evader to follow the waypoint
+and avoid detection in Equation (2) where rgis the reward
+obtained when reaching the waypoint, radvis the detection
+penalty, and rdis the distance penalty to the next waypoint.
+r=rg+rd+radv (2)
+C. Cost Map Construction and Inference
+Having discussed how the diffusion path planner could
+help the RL explore within the reward promising region in
+§IV-B and how the low-level SAC policy could be derived
+under the global path and initial environment distribution,
+we now take a step further and describe which global path
+sample should be drawn in each test case.TABLE I
+DIFFUSION -RL BENCHMARKS (MEAN±STD), G: GLOBAL -VIEW MODE , L: LOCAL -VIEW MODE
+Domain Prisoner Escape (G) Narco Interdiction (G) Prisoner Escape (L) Narco Interdiction (L)
+Score↑ Detection ↓ Goal-Reach ↑ Score↑ Detection ↓ Goal-Reach ↑ Score↑ Detection ↓ Goal-Reach ↑ Score↑ Detection ↓ Goal-Reach ↑
+Non-Learning Approaches
+A-Star Heuristic 0.72±0.19 0.34 ±0.24 0.98 ±0.14 0.64 ±0.30 0.39 ±0.31 0.80 ±0.40 0.80 ±0.18 0.25 ±0.15 1.00 ±0.00 0.53 ±0.29 0.51 ±0.31 0.76 ±0.43
+RRT-Star Heuristic 0.73±0.18 0.32 ±0.22 0.94 ±0.24 0.66 ±0.31 0.38 ±0.32 0.83 ±0.38 0.77 ±0.11 0.29 ±0.14 1.00 ±0.00 0.59 ±0.26 0.46 ±0.30 0.84 ±0.37
+VO-Heuristic 0.74±0.11 0.32 ±0.14 0.98 ±0.14 0.64 ±0.10 0.43 ±0.12 1.00 ±0.00 0.73 ±0.12 0.33 ±0.15 0.99 ±0.10 0.64 ±0.10 0.43 ±0.11 1.00 ±0.00
+Learning Approaches
+DDPG 0.23±0.34 0.73 ±0.40 0.07 ±0.26 0.31 ±0.32 0.65 ±0.37 0.00 ±0.00 0.23 ±0.34 0.73 ±0.40 0.07 ±0.26 0.26 ±0.36 0.70 ±0.42 0.00 ±0.00
+SAC 0.78±0.12 0.06 ±0.11 0.13 ±0.34 0.49 ±0.35 0.43 ±0.41 0.01 ±0.10 0.73 ±0.12 0.10 ±0.15 0.05 ±0.22 0.51 ±0.40 0.41 ±0.47 0.00 ±0.00
+Diffusion Only 0.78±0.09 0.28 ±0.12 1.00 ±0.00 0.78 ±0.13 0.26 ±0.15 1.00 ±0.00 0.79 ±0.10 0.26 ±0.13 1.00 ±0.00 0.78 ±0.13 0.26 ±0.15 1.00 ±0.00
+Our Approaches
+Diffusion-RL 0.90±0.09 0.12 ±0.10 0.96 ±0.20 0.89 ±0.11 0.12 ±0.10 0.94 ±0.24 0.90 ±0.12 0.11 ±0.10 0.90 ±0.30 0.89 ±0.11 0.11 ±0.11 0.91 ±0.29
+Diffusion-RL-Map 0.94±0.08 0.07±0.08 0.98 ±0.14 0.94±0.07 0.07±0.08 1.00 ±0.00 0.95±0.09 0.05±0.07 0.95 ±0.22 0.94±0.08 0.06±0.07 0.95 ±0.22
+Even though the evasive agent does not have direct access
+to the camera or the terrain map information, this agent
+can still perform reverse spatial inference on the map by
+interacting with the learned policies to identify regions of
+heightened risk. Following this idea, we construct a cost map
+to reflect the risk of detection which we can then use to score
+the global paths.
+Algorithm 4 describes our procedure. We run a certain
+number of episodes after the hierarchy is trained well (Line
+1) and simultaneously record the evader location Xand its
+distance to the closest searching agent d(Line 2). If the
+searching agent is within the evader’s field of view, we
+select out the evader locations xiwith which the associated
+distance, di, is below a risk threshold ϵand add a Gaussian
+distribution whose mean is xiand standard deviation σ(Line
+3-5). Next, we perform normalization and output the map.
+Importantly, end-users can preview the global paths before
+execution or revise the cost map with the newly added global
+information, which adds more flexibility and interpretability
+compared with traditional fully MDP-based RL algorithms
+(Line 6). We can select the global path with the lowest cost
+based on the costmap (Line 7-8).
+Algorithm 4: Costmap and Inference
+Data: Initial state s0, Diffusion Global Planner πd,
+Learned local policy πl∗, Costmap G, Evasive
+agent location x
+Result: Selected global plan w∗
+1while costmap constructing episodes do
+◁Continue running episodes with learned policies
+2x,d=Env(s0, πd, πl∗)
+3 forallxi, difromx,ddo
+◁Update costmap when search team is close
+4 ifdi< ϵ& see searching agent then
+5 G←G+N(xi, σ2);◁Add a Gaussian
+◁Normalize and adjust costmap
+6G←adjust (G/Gmax);
+◁Get global path samples
+7T ← { wi:wi∼πd(w|s0)}Ns
+i=0;
+◁Find global path with lowest cost
+8w∗= arg maxwi∈TR
+wiG(w)dw;
+V. R ESULTS & D ISCUSSION
+In this section, we will first benchmark our diffusion-
+RL framework for the global- and local-view evader againstboth heuristics and learning based baselines (see §V-A).
+Then we visualize our constructed costmap and show the
+interpretability, efficiency, and generalizability of our method
+in multiple ablation studies (see §V-B-§V-D). Next, we
+validate our hierarchy in the real robot testbed (see §V-E).
+Finally, we include a result discussion section (see §V-F).
+Fig. 3. Our Diffusion-RL trajectory vs SAC trajectory. Colorbar indicates
+the distance between the evader and closest pursuer and the purple line
+indicates the diffusion global path.
+A. Achieving Long-Term Planning and Short-Term Evasion
+We propose to use the following metrics to quantitatively
+evaluate our method and compare it against the baselines:
+detection, goal-reaching rate, and score ( ↑means higher is
+better and ↓means lower is better in Table I). Detection is
+the average number of steps when the evader is detected for
+each episode. Goal-reaching rate is the number of episodes
+in which the evader reaches the goal within the time limit
+divided by the total number of episodes tested. The score
+metric is a weighted reward term that balances the two
+main objectives in our domains: reaching the goal ( ±50) and
+staying undetected by the opposing blue agents (-1 for each
+detection). Each metric is normalized by the min-max value
+of each category and we test the algorithms in 100 episodes
+with different random seeds from the training.
+We compare our diffusion+RL method with learning based
+and non-learning-based baselines. A* and RRT* heuristics
+are from the open-sourced environment [12] where the
+evader follows the A* or RRT* path and shows some pre-
+scripted adversarial behaviors (e.g. heading to dense forest,
+changing velocity, etc.) when the search team is nearby.
+Velocity obstacle (VO) method is widely used in dynamic
+obstacle avoidance tasks which samples a velocity from the(a) Costmap
+ (b) Camera Locations
+ (c) Selected Path
+ (d) Ad Hoc Map
+ (e) New Selected Path
+Fig. 4. Path Planning with the Costmap: The costmap (a) is constructed by correlating the agent’s risk of detection to its location on the map. We show
+in (b) that the agent can successfully identify where the cameras are. Given this costmap, the agent can select a path that best evades high-cost regions
+(c). Additional obstacles can be added ad-hoc (d) and a new path can be chosen (e). The grey areas indicate untraversable obstacles or danger zones.
+collision-free velocity space [47]. From Table I, we find these
+heuristics can reach the goal at a high rate in two view
+modes across both domains. However, the heuristic evader is
+detected by the search team much more than our methods,
+which leads to a lower score. The main reason is that the
+evader will be exposed to the cameras hidden from it, which
+may attract the dynamic search team and the hand-crafted
+evasive heuristic is not optimal for escaping.
+Although RL-only approaches (DDPG [48] & SAC [49])
+directly optimize the score as the reward function, our
+methods outperform them on average by 108% on the score
+metric across both domains. The SAC evader can be detected
+less than our diffusion-RL algorithm by 10.26% in prisoner
+escape domain, which is interesting and a red herring. Figure
+3 shows a red colorbar for the distance between the evader
+and the closest agent in the pursuit team, and the diamond
+purple line indicates the diffusion planned global path. From
+the trajectory, we can see the SAC algorithm will lead the
+evader to the edge of the map where there is no camera but
+not the goal hideout. Instead, our method can loosely follow
+the diffusion waypoints (purple diamond) and simultaneously
+deviate a little to avoid the search team when they are close
+(indicated by magnet and orange dashed box). In addition,
+our method learns to reduce the evader speed when evading,
+which lowers the probability of detection, but maintains
+a higher speed when safer. We also ablate our diffusion-
+RL with the diffusion-only baseline (Diffuser [36]) and the
+56.6% detection rate decreasing shows the low-level RL
+policy is crucial to adversarial evading behaviors.
+B. Interpretability and Flexibility
+As discussed in §IV-C, we build a costmap based on the
+distance between evader and pursuer which implies detection
+risks. The costmap serves as an interpretable and memory-
+efficient way to allow our hierarchical agent to plan based
+on past experiences and will improve the flexibility in the
+inference stage compared with RL-only motion planning.
+Figure 4a shows the costmap, where the high-intensity
+region indicates the evader is close to the search team which
+may lead to detection. We also find that the potential de-
+tection usually happens around the cameras (see Figure 4b),
+which is reasonable since the searching team will search the
+region after the evader is detected by the camera. Therefore,
+Figure 4c shows the evasive agent can select the best globalpath which receives lowest cost and can best conceal it from
+the camera array. At the inference stage, we can adjust the
+costmap with the new information we received. For example,
+we can add an undesired danger zone for the evader on the
+costmap (see Figure 4d) such that it will select another way
+to reach another hideout which will avoid the danger zone
+(see Figure 4e). We ablate our model with and without the
+costmap and show that the detection from map-based path
+selection is further decreased by half.
+C. Efficiency and Diversity in Guidance
+Figure 5a-5b compares the diffusion global paths trained
+on the datasets from RRT* and A*. We see the diffusion
+model encodes a more diverse distribution of the paths lead-
+ing to the final hideouts. As a result, A* guided RL method
+can only receive a score of 0.78 ±0.09, which is worse than
+the performance of our diffusion-RL method (0.90 ±0.09).
+Table 5c shows the planning time in the inference stage for
+both the diffusion and RRT* algorithms. The diffusion model
+takes 85.7% less time to generate one trajectory compared
+with RRT*, which requires a map search. Furthermore, the
+difference is enlarged when planning more paths since we
+can draw samples from the diffusion model in parallel.
+In addition, Figure 5d shows that the diffusion-guided RL
+training uses less than a half time to reach the same reward
+level (save 25.2 hours), which greatly improves training
+time efficiency crucial to parameter tuning. We generate the
+results using a machine with 11th Gen Intel Core i9 processor
+and GeForce GTX 1660 Ti graphic card.
+D. Generailizability to New Camera Map
+The high-level diffusion and low-level RL policies trained
+on one map can be generalized to other maps with different
+camera distributions with the only need to re-run costmap
+reconstruction process rather than the whole training pipeline
+(see Figure 6). We benchmark with the new camera map,
+and our results are shown in the Table II. Our method still
+outperforms the best baseline by 18.6% and outperforms
+43.99% across all baselines in average, which shows our
+algorithm can be generalized to the new camera map without
+any retraining of diffusion or RL policies.
+E. Real Robot Demonstration
+We also test our method with the Robotarium [50] testbed
+to validate our method with real robot dynamics. Figure 7(a) A* Trajectories
+ (b) Diffusion Trajectories
+Traj. RRT* Diffusion
+1 0.7 ±0.2 0.1 ±0.0
+10 6.2 ±0.3 0.2 ±0.0
+20 12.5 ±0.6 0.4 ±0.1
+30 19.7 ±1.5 0.4 ±0.0
+40 26.3 ±1.9 0.5 ±0.0
+50 33.0 ±2.3 0.6 ±0.2
+(c) Inference Time (mean ±std)
+ (d) Training Time (Hours)
+Fig. 5. The paths from the diffusion model trained on RRT* are more
+diverse than A* paths (5a-5b). Compared to the traditional RRT* planner,
+the diffusion model leverages the power of parallel computing to generate
+trajectories an order of magnitude faster (5c). The diffusion-guided RL
+training also significantly decreases the training time (5d).
+(a) New Camera Map
+ (b) New Costmap
+Fig. 6. (6a) - Cameras are highlighted. We use a different camera
+distribution in the test scenario (indicated by orange) from the one in
+the training scenario (indicated by blue). (6b) - we derive a new costmap
+reflecting the testing scenario camera distribution by running Algorithm 4.
+shows the comparison among the RRT* heuristic, SAC, and
+our method. We find the evader (red trajectory) equipped
+with our policy can reach the hideout and remain untracked
+by the searching team (blue and cyan trajectories). In com-
+parison, the SAC policy does not lead the evader to the
+hideout, and the RRT* heuristic travels a path near cameras
+and is tracked by the helicopter starting at t≈90. This
+validates our benchmarking results and indicates that our hi-
+erarchical data-driven learning-based method can outperform
+the baselines from the efficient diffusion-guided exploration,
+RL-based trial-and-error multi-agent interaction, and map
+optimizations.
+F . Discussion
+The significant disparity in goal-reaching rates between
+standalone RL and our approaches indicates that RL strug-
+gles with long-horizon exploration in large partially observ-
+able domains, supporting our premise in §I that diffusion
+models can guide RL exploration. Additionally, Figure 3
+reveals that SAC can become trapped in a local minimum.
+From this, we infer that our methods can achieve long-term
+planning by providing the RL agent with a diffusion-basedTABLE II
+GENERALIZABILITY BENCHMARKS (MEAN±STD)
+Domain (global-view) Prisoner Escape
+Score↑ Detection ↓ Goal-Reach. ↑
+Non-Learning Approaches
+A-Star Heuristic 0.694±0.185 0.376 ±0.229 0.970 ±0.171
+RRT-Star Heuristic 0.701±0.179 0.367 ±0.220 0.970 ±0.171
+VO-Heuristic 0.728±0.104 0.336 ±0.131 0.980 ±0.140
+Learning Approaches
+DDPG 0.136±0.241 0.847 ±0.264 0.070 ±0.255
+SAC 0.670±0.203 0.195 ±0.226 0.130 ±0.336
+Diffusion Only 0.767±0.080 0.292 ±0.100 1.000 ±0.000
+Our Approaches
+Diffusion-RL [ours] 0.864±0.111 0.155 ±0.116 0.940 ±0.237
+Diffusion-RL-Map [ours] 0.910±0.075 0.113±0.093 1.000 ±0.000
+(a) RRT* Heuristic
+ (b) SAC
+ (c) Diffusion-RL-Map
+Fig. 7. Pursuit-evasion trajectories: the evader, search party, and helicopter
+trajectory are indicated with red, blue, and cyan, respectively. We use a
+diffusion model to guide the evader to the hideout and explore escaping
+behaviors with RL, which performs better than RRT* heuristic with insuffi-
+cient evasive behaviors and SAC method converging to a suboptimal place.
+global plan while retaining the agility to evade opponent
+agents in the short horizon. The ablation studies in §V-B
+to §V-D demonstrate that our hierarchy can generate more
+interpretable paths, have more flexible motion plans and
+generalize to different test maps. Importantly, it significantly
+improves training and inference efficiency, which unlocks the
+potential on more applications in real-time tasks [51], [52].
+VI. C ONCLUSION AND FUTURE WORK
+In conclusion, we have presented a novel learning-based
+framework for evaders in large, partially observable, multi-
+agent pursuit-evasion settings. Our approach can help the
+evader reach the hideout and best conceal itself from cap-
+turing by using a hierarchy with a high-level diffusion path
+planner and a low-level RL evasive policy. In the future,
+we plan to train the whole framework end-to-end and bring
+our diffusion-RL technique to real-world navigation tasks
+involving high-level human domain knowledge transfer and
+low-level dynamic constraints (e.g. environment-aware path
+generation and finetuning in autonomous driving).
+REFERENCES
+[1] R. Vidal, O. Shakernia, H. J. Kim, D. H. Shim, and S. Sastry,
+“Probabilistic pursuit-evasion games: theory, implementation, and ex-
+perimental evaluation,” IEEE transactions on robotics and automation ,
+vol. 18, no. 5, pp. 662–669, 2002.
+[2] W. Silkman, “The use of us naval surface combatants in the maritime
+counter narcotics interdiction effort: A major impact on the flow of
+drugs,” Newport, Rhode Island, United States. Retrieved from Naval
+War College , 2001.
+[3] Y . A. Hasan, A. Garg, S. Sugaya, and L. Tapia, “Defensive escort
+teams for navigation in crowds via multi-agent deep reinforcement
+learning,” IEEE Robotics and Automation Letters , vol. 5, no. 4, pp.
+5645–5652, 2020.
+[4] E. Antonioni, V . Suriani, F. Riccio, and D. Nardi, “Game strategies
+for physical robot soccer players: A survey,” IEEE Transactions on
+Games , vol. 13, no. 4, pp. 342–357, 2021.[5] A. Afzalov, A. Lotfi, B. Inden, and M. E. Aydin, “A strategy-based
+algorithm for moving targets in an environment with multiple agents,”
+SN Computer Science , vol. 3, no. 6, p. 435, 2022.
+[6] V . Bulitko and N. Sturtevant, “State abstraction for real-time moving
+target pursuit: A pilot study,” in AAAI Workshop: Learning For Search .
+Citeseer, 2006, pp. 72–79.
+[7] A. I. A. Isaza, J. Lu, V . Bulitko, and R. Greiner, “A cover-based
+approach to multi-agent moving target pursuit,” in Proceedings of
+the AAAI Conference on Artificial Intelligence and Interactive Digital
+Entertainment , vol. 4, no. 1, 2008, pp. 54–59.
+[8] D. Sigurdson, V . Bulitko, W. Yeoh, C. Hern ´andez, and S. Koenig,
+“Multi-agent pathfinding with real-time heuristic search,” in 2018
+IEEE Conference on Computational Intelligence and Games (CIG) .
+IEEE, 2018, pp. 1–8.
+[9] J. Kennedy and R. Eberhart, “Particle swarm optimization,” in Pro-
+ceedings of ICNN’95-international conference on neural networks ,
+vol. 4. IEEE, 1995, pp. 1942–1948.
+[10] Q. Liu, W. Wei, H. Yuan, Z.-H. Zhan, and Y . Li, “Topology selection
+for particle swarm optimization,” Information Sciences , vol. 363, pp.
+154–173, 2016.
+[11] Y . Bar-Shalom and X.-R. Li, Multitarget-multisensor tracking: prin-
+ciples and techniques . YBs Storrs, CT, 1995, vol. 19.
+[12] S. Ye, M. Natarajan, Z. Wu, R. Paleja, L. Chen, and M. C. Gom-
+bolay, “Learning models of adversarial agent behavior under partial
+observability,” 2023.
+[13] S. Ye, M. Natarajan, Z. Wu, and M. Gombolay, “Diffusion based multi-
+agent adversarial tracking,” arXiv preprint arXiv:2307.06244 , 2023.
+[14] Z. Wu, S. Ye, M. Natarajan, L. Chen, R. Paleja, and M. C. Gombo-
+lay, “Adversarial search and tracking with multiagent reinforcement
+learning in sparsely observable environment,” 2023.
+[15] J. Li, C. Tang, M. Tomizuka, and W. Zhan, “Hierarchical plan-
+ning through goal-conditioned offline reinforcement learning,” IEEE
+Robotics and Automation Letters , vol. 7, no. 4, pp. 10 216–10 223,
+2022.
+[16] J. Liu, M. Stamatopoulou, and D. Kanoulas, “Dipper: Diffusion-
+based 2d path planner applied on legged robots,” arXiv preprint
+arXiv:2310.07842 , 2023.
+[17] J. Carvalho, A. T. Le, M. Baierl, D. Koert, and J. Peters, “Motion
+planning diffusion: Learning and planning of robot motions with
+diffusion models,” in 2023 IEEE/RSJ International Conference on
+Intelligent Robots and Systems (IROS) . IEEE, 2023, pp. 1916–1923.
+[18] G. Wang, F. Wei, Y . Jiang, M. Zhao, K. Wang, and H. Qi, “A multi-
+auv maritime target search method for moving and invisible objects
+based on multi-agent deep reinforcement learning,” Sensors , vol. 22,
+no. 21, p. 8562, 2022.
+[19] M. Andrychowicz, F. Wolski, A. Ray, J. Schneider, R. Fong, P. Welin-
+der, B. McGrew, J. Tobin, O. Pieter Abbeel, and W. Zaremba, “Hind-
+sight experience replay,” Advances in neural information processing
+systems , vol. 30, 2017.
+[20] P.-L. Bacon, J. Harb, and D. Precup, “The option-critic architecture,” in
+Proceedings of the AAAI conference on artificial intelligence , vol. 31,
+no. 1, 2017.
+[21] P. Zhang, X. Chen, L. Zhao, W. Xiong, T. Qin, and T.-Y . Liu,
+“Distributional reinforcement learning for multi-dimensional reward
+functions,” 2021.
+[22] S. Nasiriany, H. Liu, and Y . Zhu, “Augmenting reinforcement learning
+with behavior primitives for diverse manipulation tasks,” in 2022
+International Conference on Robotics and Automation (ICRA) . IEEE,
+2022, pp. 7477–7484.
+[23] M. Salimi, “A pursuit-evasion game with hybrid system of dynamics,”
+Mathematical Methods in the Applied Sciences , 2020.
+[24] Y . Feng, L. Dai, J. Gao, and G. Cheng, “Uncertain pursuit-evasion
+game,” soft computing , vol. 24, pp. 2425–2429, 2020.
+[25] R. Vidal, O. Shakernia, H. Kim, D. Shim, and S. Sastry, “Probabilis-
+tic pursuit-evasion games: theory, implementation, and experimental
+evaluation,” IEEE Transactions on Robotics and Automation , vol. 18,
+no. 5, pp. 662–669, 2002.
+[26] Y . Wang, L. Dong, and C. Sun, “Cooperative control for multi-player
+pursuit-evasion games with reinforcement learning,” Neurocomputing ,
+vol. 412, pp. 101–114, 2020.
+[27] J. Selvakumar and E. Bakolas, “Min–max q-learning for multi-player
+pursuit-evasion games,” Neurocomputing , vol. 475, pp. 1–14, 2022.
+[28] X. Qu, W. Gan, D. Song, and L. Zhou, “Pursuit-evasion game strategy
+of usv based on deep reinforcement learning in complex multi-obstacle
+environment,” Ocean Engineering , vol. 273, p. 114016, 2023.[29] Z. Zhou and H. Xu, “Decentralized optimal large scale multi-player
+pursuit-evasion strategies: A mean field game approach with reinforce-
+ment learning,” Neurocomputing , vol. 484, pp. 46–58, 2022.
+[30] C. De Souza, R. Newbury, A. Cosgun, P. Castillo, B. Vidolov, and
+D. Kuli ´c, “Decentralized multi-agent pursuit using deep reinforcement
+learning,” IEEE Robotics and Automation Letters , vol. 6, no. 3, pp.
+4552–4559, 2021.
+[31] H. Yang, P. Ge, J. Cao, Y . Yang, and Y . Liu, “Large scale pursuit-
+evasion under collision avoidance using deep reinforcement learning,”
+in2023 IEEE/RSJ International Conference on Intelligent Robots and
+Systems (IROS) . IEEE, 2023, pp. 2232–2239.
+[32] B. Baker, I. Kanitscheider, T. Markov, Y . Wu, G. Powell, B. McGrew,
+and I. Mordatch, “Emergent tool use from multi-agent autocurricula,”
+arXiv preprint arXiv:1909.07528 , 2019.
+[33] P. Dhariwal and A. Nichol, “Diffusion models beat gans on image syn-
+thesis,” Advances in Neural Information Processing Systems , vol. 34,
+pp. 8780–8794, 2021.
+[34] J. Ho, C. Saharia, W. Chan, D. J. Fleet, M. Norouzi, and T. Salimans,
+“Cascaded diffusion models for high fidelity image generation.” J.
+Mach. Learn. Res. , vol. 23, no. 47, pp. 1–33, 2022.
+[35] F.-A. Croitoru, V . Hondru, R. T. Ionescu, and M. Shah, “Diffusion
+models in vision: A survey,” IEEE Transactions on Pattern Analysis
+and Machine Intelligence , 2023.
+[36] M. Janner, Y . Du, J. Tenenbaum, and S. Levine, “Planning with
+diffusion for flexible behavior synthesis,” in International Conference
+on Machine Learning , 2022.
+[37] C. Chi, S. Feng, Y . Du, Z. Xu, E. Cousineau, B. Burchfiel, and S. Song,
+“Diffusion policy: Visuomotor policy learning via action diffusion,” in
+Proceedings of Robotics: Science and Systems (RSS) , 2023.
+[38] L. Gao, J. Ding, W. Liu, H. Piao, Y . Wang, X. Yang, and B. Yin,
+“A vision-based irregular obstacle avoidance framework via deep
+reinforcement learning,” in 2021 IEEE/RSJ International Conference
+on Intelligent Robots and Systems (IROS) . IEEE, 2021, pp. 9262–
+9269.
+[39] B. Rub ´ı, B. Morcego, and R. P ´erez, “Quadrotor path following and
+reactive obstacle avoidance with deep reinforcement learning,” Journal
+of Intelligent & Robotic Systems , vol. 103, pp. 1–17, 2021.
+[40] R. Cimurs, J. H. Lee, and I. H. Suh, “Goal-oriented obstacle avoid-
+ance with deep reinforcement learning in continuous action space,”
+Electronics , vol. 9, no. 3, p. 411, 2020.
+[41] L. K ¨astner, T. Buiyan, L. Jiao, T. A. Le, X. Zhao, Z. Shen, and J. Lam-
+brecht, “Arena-rosnav: Towards deployment of deep-reinforcement-
+learning-based obstacle avoidance into conventional autonomous nav-
+igation systems,” in 2021 IEEE/RSJ International Conference on
+Intelligent Robots and Systems (IROS) . IEEE, 2021, pp. 6456–6463.
+[42] P. Hungerl ¨ander, “Discrete-time dynamic noncooperative game the-
+ory,” 2014.
+[43] M. Sani, B. Robu, and A. Hably, “Pursuit-evasion game for nonholo-
+nomic mobile robots with obstacle avoidance using nmpc,” in 2020
+28th Mediterranean conference on control and automation (MED) .
+IEEE, 2020, pp. 978–983.
+[44] K. E. C. Booth, C. Piacentini, S. Bernardini, and J. C. Beck, “Target
+search on road networks with range-constrained uavs and ground-
+based mobile recharging vehicles,” IEEE Robotics and Automation
+Letters , vol. 5, no. 4, pp. 6702–6709, 2020.
+[45] A. I. A. Isaza, J. Lu, V . Bulitko, and R. Greiner, “A cover-based
+approach to multi-agent moving target pursuit,” in Proceedings of
+the AAAI Conference on Artificial Intelligence and Interactive Digital
+Entertainment , vol. 4, no. 1, 2008, pp. 54–59.
+[46] Z. Wu, S. Ye, M. Natarajan, L. Chen, R. Paleja, and M. C. Gombo-
+lay, “Adversarial search and tracking with multiagent reinforcement
+learning in sparsely observable environment,” in 2023 International
+Symposium on Multi-Robot and Multi-Agent Systems (MRS) , 2023,
+pp. 43–49.
+[47] P. Fiorini and Z. Shiller, “Motion planning in dynamic environments
+using velocity obstacles,” The international journal of robotics re-
+search , vol. 17, no. 7, pp. 760–772, 1998.
+[48] T. P. Lillicrap, J. J. Hunt, A. Pritzel, N. Heess, T. Erez, Y . Tassa,
+D. Silver, and D. Wierstra, “Continuous control with deep reinforce-
+ment learning,” arXiv preprint arXiv:1509.02971 , 2015.
+[49] T. Haarnoja, A. Zhou, P. Abbeel, and S. Levine, “Soft actor-critic: Off-
+policy maximum entropy deep reinforcement learning with a stochastic
+actor,” in International conference on machine learning . PMLR,
+2018, pp. 1861–1870.[50] S. Wilson, P. Glotfelter, L. Wang, S. Mayya, G. Notomista, M. Mote,
+and M. Egerstedt, “The robotarium: Globally impactful opportunities,
+challenges, and lessons learned in remote-access, distributed control of
+multirobot systems,” IEEE Control Systems Magazine , vol. 40, no. 1,
+pp. 26–44, 2020.
+[51] Z. Wu, Z. Zaidi, A. Patil, Q. Xiao, and M. Gombolay, “Learning
+wheelchair tennis navigation from broadcast videos with domainknowledge transfer and diffusion motion planning,” 2024. [Online].
+Available: https://arxiv.org/abs/2409.19771
+[52] K. M. Lee, S. Ye, Q. Xiao, Z. Wu, Z. Zaidi, D. B. D’Ambrosio,
+P. R. Sanketi, and M. Gombolay, “Learning diverse robot striking
+motions with diffusion models and kinematically constrained gradient
+guidance,” arXiv preprint arXiv:2409.15528 , 2024.

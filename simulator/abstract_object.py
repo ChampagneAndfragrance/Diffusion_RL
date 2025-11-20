@@ -1022,4 +1022,6 @@ class DetectionObject(AbstractObject):
         :return: the maximum distance of 100% PoD
         """
         # cameras can detect an object within 4 grids moving with speed 1 with 100% PoD in wood
-        return self.detection_factor * self.terrain.detection_coefficient_given_location(self.location) * self.detection_object_type_coefficient * speed + 1
+        # Use minimum speed of 1.0 to ensure stationary targets are still detectable
+        effective_speed = max(speed, 1.0)
+        return self.detection_factor * self.terrain.detection_coefficient_given_location(self.location) * self.detection_object_type_coefficient * effective_speed + 1

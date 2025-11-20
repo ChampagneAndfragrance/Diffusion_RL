@@ -553,7 +553,7 @@ if __name__ == "__main__":
 
     starting_seed=0; num_runs=10000; epsilon=0; folder_name = "balance_game"
 
-    heuristic_type = "RRTStarOnly" # "AStar_only, diffusion, RRTStarOnly, RRTStar" 
+    heuristic_type = "diffusion" # "AStar_only, diffusion, RRTStarOnly, RRTStar" 
     blue_type = "heuristic" # "heuristic", "quaisiEED"
     random_cameras=False
     observation_step_type = "Blue"
