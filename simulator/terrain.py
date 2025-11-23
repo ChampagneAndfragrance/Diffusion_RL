@@ -29,7 +29,7 @@ class Terrain:
                 #  num_mountains=2,
                  percent_mountain=.08,
                  percent_dense=.30,
-                 forest_color_scale = 6, 
+                 forest_color_scale = 1, 
                  forest_density_array = None,
                  mountain_locations = [(400, 300), (1600, 1800)]):
         """

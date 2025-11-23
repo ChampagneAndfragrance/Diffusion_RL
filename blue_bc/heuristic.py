@@ -1,9 +1,25 @@
 """
 blue_bc.heuristic
 -----------------
-Heuristic controllers for the blue team used for interactive recordings and
-baseline experiments. These provide simple, explainable behaviors that the
-recorder can use while a human controls the fugitive.
+BEHAVIOR CLONING MODULE - Blue team heuristics for DATA COLLECTION and TRAINING
+
+Purpose: Simplified, clean heuristic policies designed for generating training data
+         when humans control the fugitive in play-and-record sessions.
+
+Use this module for:
+- Interactive recording sessions (tools/play_and_record.py)
+- Generating behavior cloning training datasets
+- Baseline experiments with simple pursuit behaviors
+
+Key behaviors:
+- BlueHeuristic: Pursuit/interception with velocity prediction
+  * Before detection: Random wandering
+  * First detection: Direct pursuit to detected location
+  * Subsequent detections: Intercept based on fugitive velocity
+- SimplifiedBlueHeuristicPara: Simplified tracking and interception
+- HierRLBlue: Hierarchical RL-based blue team controller
+
+Note: For evaluation/deployment with full ML features, see blue_policies.heuristic
 """
 
 import matplotlib.pyplot as plt
@@ -50,9 +66,14 @@ class BlueHeuristic:
                 self.command_each_party("plan_path_to_loc", new_detection)
             else:
                 vector = np.array(new_detection) - np.array(self.detection_history[-2][0])
-                speed = np.sqrt(np.sum(np.square(vector))) / (self.timesteps - self.detection_history[-2][1])
-                direction = np.arctan2(vector[1], vector[0])
-                self.command_each_party("plan_path_to_intercept", speed, direction, new_detection)
+                time_diff = self.timesteps - self.detection_history[-2][1]
+                if time_diff > 0:
+                    speed = np.sqrt(np.sum(np.square(vector))) / time_diff
+                    direction = np.arctan2(vector[1], vector[0])
+                    self.command_each_party("plan_path_to_intercept", speed, direction, new_detection)
+                else:
+                    # Same timestep detections - just go to location
+                    self.command_each_party("plan_path_to_loc", new_detection)
         if self.debug:
             self.debug_plot_plans()
         # self.command_each_party("move_according_to_plan")

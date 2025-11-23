@@ -1,3 +1,27 @@
+"""
+blue_policies.heuristic
+-----------------------
+PRODUCTION POLICIES MODULE - Full suite of blue team strategies for EVALUATION/DEPLOYMENT
+
+Purpose: Complete set of blue team policies including ML-based approaches,
+         designed for actual gameplay, evaluation, and competitive scenarios.
+
+Use this module for:
+- Evaluating fugitive policies against various blue strategies
+- Running experiments with trained RL models
+- Testing different pursuit algorithms
+- Production deployment of blue team behaviors
+
+Available policies:
+- BlueRandom: Purely random movement (baseline)
+- BlueHeuristic: Pursuit/interception similar to blue_bc version
+- QuasiEED: Advanced tracking with velocity estimation
+- RLWrapper: Wrapper for trained MADDPG/attention models
+- SimplifiedBlueHeuristic: Lightweight tracking policy
+
+Note: For simple data collection sessions, use blue_bc.heuristic instead
+"""
+
 import matplotlib.pyplot as plt
 import time
 import numpy as np
@@ -231,9 +255,10 @@ class QuasiEED:
                 omega = 0
                 c = 1
             else:
-                N_best = x_i
-                omega = 1
-                c = 0
+                # Random search when not detected - move to random point on map
+                N_best = np.random.uniform(0, 1, size=2)
+                omega = 0.5
+                c = 0.5
             # calculate the v_i
             approch_vec = (N_best - x_i)
             if np.linalg.norm(approch_vec) >= self.max_vel_mat[i]:
@@ -244,7 +269,9 @@ class QuasiEED:
             v_pso_i = omega * self.v[i] + c * approch_vel
             self.v[i] = v_pso_i + v_rep[i]
             self.v[i] = self.v[i] / np.linalg.norm(self.v[i]) if np.linalg.norm(self.v[i]) >= 1 else self.v[i]
-            actions.append(np.concatenate((self.v[i] / (np.linalg.norm(self.v[i])+1e-10), np.linalg.norm(self.v[i], keepdims=True)*sa.speed), axis=-1))
+
+            agent_speed = self.max_vel_mat[i] * self.env.dim_x  # Convert back to actual speed
+            actions.append(np.concatenate((self.v[i] / (np.linalg.norm(self.v[i])+1e-10), np.linalg.norm(self.v[i], keepdims=True)*agent_speed), axis=-1))
         return actions
 
 class RLWrapper:

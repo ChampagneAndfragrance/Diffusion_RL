@@ -180,8 +180,8 @@ class PrisonerBothEnv(gym.Env):
                  terrain=None,
                  terrain_map=None,
                  num_towns=0,
-                 num_search_parties=4,
-                 num_helicopters=2,
+                 num_search_parties=6,
+                 num_helicopters=4,
                  helicopter_battery_life=360,
                  helicopter_recharge_time=360,
                  spawn_mode='normal',
@@ -293,7 +293,7 @@ class PrisonerBothEnv(gym.Env):
                 # use original map with size 2428x2428
                 dim_x = 2428
                 dim_y = 2428
-                percent_dense = 0.30
+                percent_dense = 0.3
                 size_of_dense_forest = int(dim_x * percent_dense)
                 # Use original square map (won't be used since we're loading from file)
                 forest_density_array = generate_square_map(
